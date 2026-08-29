@@ -120,6 +120,8 @@ async def process_video_project(project_id: int) -> None:
             db.flush()
 
             project.status = VideoProjectStatus.analyzing
+            if segments:
+                project.duration_seconds = max(seg.end_time for seg in segments)
             db.commit()
 
             detect_highlights(segments)

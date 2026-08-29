@@ -70,26 +70,37 @@ def _download_via_ytdlp(url: str, target_dir: Path, filename_stem: str) -> Path:
         raise ValidationAppError("yt-dlp is not installed")
     outtmpl = str(target_dir / f"{filename_stem}.%(ext)s")
     ydl_opts = {
-        "format": "bestvideo[ext=mp4]+bestaudio[ext=m4a]/bestvideo+bestaudio/best[ext=mp4]/best",
+        "format": "bestvideo[height<=1080][ext=mp4]+bestaudio[ext=m4a]/bestvideo[height<=1080]+bestaudio/best[height<=1080][ext=mp4]/best",
         "merge_output_format": "mp4",
         "outtmpl": outtmpl,
         "quiet": True,
         "no_warnings": True,
         "noplaylist": True,
         "max_filesize": MAX_UPLOAD_SIZE_BYTES,
-        # Without this, a stalled connection to the source host can hang
-        # this download (and the worker thread it runs in) indefinitely.
         "socket_timeout": 30,
     }
-    with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-        info = ydl.extract_info(url, download=True)
-        actual_path = Path(ydl.prepare_filename(info))
-        if not actual_path.exists():
-            candidates = list(target_dir.glob(f"{filename_stem}.*"))
-            if candidates:
-                return candidates[0]
-            raise ValidationAppError("yt-dlp downloaded file not found")
-        return actual_path
+    try:
+        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+            info = ydl.extract_info(url, download=True)
+            actual_path = Path(ydl.prepare_filename(info))
+            if not actual_path.exists():
+                candidates = list(target_dir.glob(f"{filename_stem}.*"))
+                if candidates:
+                    return candidates[0]
+                raise ValidationAppError("yt-dlp downloaded file not found")
+            return actual_path
+    except Exception as exc:
+        for partial in target_dir.glob(f"{filename_stem}.*"):
+            try:
+                partial.unlink(missing_ok=True)
+            except Exception:
+                pass
+        err_msg = str(exc)
+        if "No space left on device" in err_msg or "Errno 28" in err_msg:
+            raise ValidationAppError(
+                "Device ran out of storage space while downloading this video. Please free up some disk space."
+            ) from exc
+        raise
 
 
 async def save_upload(file: UploadFile, subdir: str) -> str:

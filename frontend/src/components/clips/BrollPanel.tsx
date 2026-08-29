@@ -131,11 +131,20 @@ export function BrollPanel({ clipId }: BrollPanelProps) {
               key={asset.id}
               className="flex flex-col overflow-hidden rounded-xl border border-glass-border bg-background/40"
             >
-              <img
-                src={asset.asset_url}
-                alt={asset.keyword}
-                className="h-20 w-full object-cover"
-              />
+              <div className="relative h-20 w-full overflow-hidden bg-muted">
+                <video
+                  src={asset.asset_url}
+                  muted
+                  autoPlay
+                  loop
+                  playsInline
+                  preload="metadata"
+                  className="h-full w-full object-cover"
+                />
+                <div className="absolute top-1.5 left-1.5 rounded bg-black/60 px-1.5 py-0.5 text-[9px] font-mono text-white/90">
+                  {asset.position_start}s - {asset.position_end}s
+                </div>
+              </div>
               <div className="flex flex-1 flex-col gap-1.5 p-2">
                 <p className="truncate text-xs font-medium">{asset.keyword}</p>
                 <span

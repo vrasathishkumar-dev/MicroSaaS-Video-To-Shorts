@@ -92,14 +92,44 @@ def _score_segment(segment: TranscriptSegment) -> float:
     return round(score, 4)
 
 
+def calculate_target_shorts_count(total_duration_seconds: float) -> int:
+    """Calculate the ideal number of shorts based on total video duration.
+
+    Scaling rule:
+      - <= 60s: 1 short
+      - <= 3 min (180s): 2 shorts
+      - <= 6 min (360s): 3 shorts
+      - <= 10 min (600s): 4-5 shorts
+      - <= 20 min (1200s): 6-7 shorts
+      - <= 30 min (1800s): 8-10 shorts
+      - <= 60 min (3600s): 12-15 shorts
+      - > 60 min: ~1 short per 4 minutes (up to 25)
+    """
+    if total_duration_seconds <= 60.0:
+        return 1
+    elif total_duration_seconds <= 180.0:
+        return 2
+    elif total_duration_seconds <= 360.0:
+        return 3
+    elif total_duration_seconds <= 600.0:
+        return 4
+    elif total_duration_seconds <= 1200.0:
+        return 6
+    elif total_duration_seconds <= 1800.0:
+        return 8
+    elif total_duration_seconds <= 3600.0:
+        return 12
+    else:
+        return min(25, max(12, int(total_duration_seconds // 240)))
+
+
 def detect_highlights(segments: list[TranscriptSegment]) -> list[TranscriptSegment]:
-    """Score transcript segments and flag the top-scoring ones as highlights.
+    """Score transcript segments and flag highlights based on video duration.
 
     Mutates every segment in place, setting:
       - `highlight_score`: a 0.0-1.0 heuristic score.
-      - `is_highlight`: True for the top HIGHLIGHT_FRACTION of segments by
-        score (at least MIN_HIGHLIGHTS when the list is non-empty), False
-        otherwise.
+      - `is_highlight`: True for the top-scoring segments proportional to
+        the video duration, distributed across the timeline.
 
     Does not commit/persist changes — callers own the DB session and
     transaction. Returns the same list (now scored) for convenience.
@@ -111,9 +141,43 @@ def detect_highlights(segments: list[TranscriptSegment]) -> list[TranscriptSegme
         segment.highlight_score = _score_segment(segment)
         segment.is_highlight = False
 
+    min_time = min(s.start_time for s in segments)
+    total_duration = max(s.end_time for s in segments) - min_time
+    target_count = calculate_target_shorts_count(total_duration)
+
+    # If segment count is small, clamp target count
+    target_count = max(MIN_HIGHLIGHTS, min(target_count, len(segments)))
+
+    # Sort segments by highlight_score descending
     ranked = sorted(segments, key=lambda s: s.highlight_score or 0.0, reverse=True)
-    highlight_count = max(MIN_HIGHLIGHTS, round(len(segments) * HIGHLIGHT_FRACTION))
-    for segment in ranked[:highlight_count]:
-        segment.is_highlight = True
+
+    # Bucket segments temporally so highlights are distributed across the entire video
+    # from the beginning to the very end.
+    if target_count > 1 and len(segments) >= target_count * 2:
+        bucket_size = total_duration / target_count
+
+        for b in range(target_count):
+            b_start = min_time + b * bucket_size
+            b_end = min_time + (b + 1) * bucket_size
+            bucket_segs = [
+                s for s in segments
+                if (s.start_time >= b_start and s.start_time < b_end) or (s.end_time > b_start and s.end_time <= b_end)
+            ]
+            if bucket_segs:
+                best_in_bucket = max(bucket_segs, key=lambda s: s.highlight_score or 0.0)
+                best_in_bucket.is_highlight = True
+
+        # Fill remaining slots with highest overall scores if any bucket was empty
+        current_count = sum(1 for s in segments if s.is_highlight)
+        if current_count < target_count:
+            for s in ranked:
+                if not s.is_highlight:
+                    s.is_highlight = True
+                    current_count += 1
+                    if current_count >= target_count:
+                        break
+    else:
+        for segment in ranked[:target_count]:
+            segment.is_highlight = True
 
     return segments

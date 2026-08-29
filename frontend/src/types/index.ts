@@ -61,9 +61,22 @@ export interface Clip {
   video_file_path: string | null;
   thumbnail_path: string | null;
   broll_assets?: BrollAsset[];
+  virality_score?: number;
+  virality_reason?: string;
+  hook_score?: number;
+  engagement_score?: number;
+  caption_style?: CaptionStylePreset;
   created_at: string;
   updated_at: string;
 }
+
+export type CaptionStylePreset =
+  | 'hormozi'
+  | 'neon'
+  | 'minimal'
+  | 'karaoke'
+  | 'bold_box'
+  | 'cyberpunk';
 
 export type BrollSource = 'pexels' | 'pixabay';
 

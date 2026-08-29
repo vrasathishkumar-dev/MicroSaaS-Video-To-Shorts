@@ -49,7 +49,7 @@ class TranscriptionError(Exception):
 
 
 def _generate_fallback_transcript(file_path: Path) -> list[dict]:
-    """Generate realistic transcript segments for local development when no API key is provided."""
+    """Generate realistic transcript segments for the ENTIRE duration of the video."""
     duration = 60.0
     try:
         import ffmpeg
@@ -59,30 +59,49 @@ def _generate_fallback_transcript(file_path: Path) -> list[dict]:
     except Exception:
         pass
 
-    sample_texts = [
-        "Welcome to this video! Today we're breaking down the biggest secret to mastering this topic.",
-        "Here is the single most important mistake that everyone makes when starting out.",
-        "Imagine if you could save hours every week just by changing this one key technique.",
-        "This incredible workflow is a total game changer for creators and engineers.",
-        "Remember to always focus on the fundamentals before scaling up your workflow.",
-        "Nobody tells you how simple this actually is once you understand the core concepts.",
-        "If you want to achieve massive success, this is the exact blueprint to follow.",
-        "Thank you so much for watching! Make sure to like, share, and stay tuned for more.",
+    # Ensure duration is a valid positive value
+    duration = max(10.0, duration)
+
+    topic_sentences = [
+        "Welcome everyone! Today we are exploring the biggest game-changing secrets to mastering this workflow.",
+        "Here is the single most important mistake that 99% of people make when starting out.",
+        "If you want to achieve massive success, you must master the fundamental principles first.",
+        "Nobody tells you how simple this actually is once you break down the core system step by step.",
+        "Imagine if you could save dozens of hours every single week by implementing this one key technique.",
+        "Let's dive into the core architecture and see exactly how high-performing teams execute on this.",
+        "The surprising truth is that most strategies fail because they ignore this critical detail.",
+        "When you look at the top creators and industry leaders, they all follow this exact blueprint.",
+        "This incredible insight completely changes the way you approach productivity and content creation.",
+        "Let's analyze what makes this approach so remarkably effective compared to traditional methods.",
+        "Here is a proven framework that will help you accelerate your growth without burning out.",
+        "Pay close attention to this next point because it is the linchpin of the whole operation.",
+        "Many people think this requires massive resources, but you can start right now with zero overhead.",
+        "By focusing on high-leverage activities, you multiply your results with half the effort.",
+        "Notice how each component connects seamlessly to deliver maximum engagement and clarity.",
+        "This is why consistency and iterative improvement always outperform overnight hype.",
+        "Let's review the key takeaways and actionable steps you can implement today.",
+        "Thank you so much for watching! If you found this valuable, be sure to like and subscribe for more insights.",
     ]
 
     segments = []
     current_time = 0.0
-    step = min(max(duration / len(sample_texts), 6.0), 20.0)
-    for text in sample_texts:
-        if current_time >= duration:
-            break
-        end_time = min(current_time + step, duration)
+    index = 0
+
+    while current_time < duration:
+        sentence = topic_sentences[index % len(topic_sentences)]
+        word_count = len(sentence.split())
+        seg_duration = min(max(word_count * 0.45, 5.0), 12.0)
+        end_time = min(round(current_time + seg_duration, 2), duration)
+
         segments.append({
             "start_time": round(current_time, 2),
-            "end_time": round(end_time, 2),
-            "text": text,
+            "end_time": end_time,
+            "text": sentence,
         })
         current_time = end_time
+        index += 1
+        if end_time >= duration:
+            break
 
     return segments or [{"start_time": 0.0, "end_time": min(duration, 10.0), "text": "Highlight segment for clip generation."}]
 
@@ -162,11 +181,23 @@ async def transcribe_video(file_path: str) -> list[dict]:
             file_path,
             exc.response.text,
         )
+        if settings.ENVIRONMENT != "production":
+            logger.warning(
+                "Transcription API key invalid or failed (%s). Falling back to development transcript generator.",
+                exc.response.status_code,
+            )
+            return _generate_fallback_transcript(path)
         raise TranscriptionError(
             f"Transcription API error ({exc.response.status_code})"
         ) from exc
     except httpx.HTTPError as exc:
         logger.error("Transcription API request failed for %s: %s", file_path, exc)
+        if settings.ENVIRONMENT != "production":
+            logger.warning(
+                "Transcription network request failed (%s). Falling back to development transcript generator.",
+                exc,
+            )
+            return _generate_fallback_transcript(path)
         raise TranscriptionError("Transcription API request failed") from exc
     finally:
         temp_audio_file.unlink(missing_ok=True)

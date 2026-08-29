@@ -182,11 +182,17 @@ export function BrollSearchModal({
                     key={key}
                     className="flex flex-col overflow-hidden rounded-xl border border-glass-border bg-background/40"
                   >
-                    <img
-                      src={result.asset_url}
-                      alt={result.keyword}
-                      className="h-24 w-full object-cover"
-                    />
+                    <div className="relative h-24 w-full overflow-hidden bg-muted">
+                      <video
+                        src={result.asset_url}
+                        muted
+                        autoPlay
+                        loop
+                        playsInline
+                        preload="metadata"
+                        className="h-full w-full object-cover"
+                      />
+                    </div>
                     <div className="flex flex-1 flex-col gap-2 p-2">
                       <div>
                         <p className="truncate text-xs font-medium">{result.keyword}</p>

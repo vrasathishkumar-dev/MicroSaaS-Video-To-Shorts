@@ -172,78 +172,85 @@ def extract_keywords(text: str, max_keywords: int = 3) -> list[str]:
     return keywords
 
 
-def _extract_clip_text(clip: Clip) -> str:
-    """Best-effort source text for keyword extraction: caption, else transcript."""
-
-    if clip.caption_text:
-        return clip.caption_text
-
+def _extract_keywords_with_timing(clip: Clip, max_keywords: int = 3) -> list[tuple[str, float, float]]:
+    """Extract search keywords paired with their exact spoken occurrence timestamps."""
     video_project = clip.video_project
-    if video_project is None:
-        return ""
+    clip_duration = clip.end_time - clip.start_time
+    if clip_duration <= 0:
+        return []
 
-    segments = [
-        segment
-        for segment in (video_project.transcript_segments or [])
-        if segment.end_time > clip.start_time and segment.start_time < clip.end_time
-    ]
-    segments.sort(key=lambda s: s.start_time)
-    return " ".join(segment.text for segment in segments if segment.text)
+    segments = []
+    if video_project and video_project.transcript_segments:
+        segments = [
+            s
+            for s in video_project.transcript_segments
+            if s.end_time > clip.start_time and s.start_time < clip.end_time
+        ]
+        segments.sort(key=lambda s: s.start_time)
+
+    if not segments:
+        words = extract_keywords(clip.caption_text or "", max_keywords=max_keywords)
+        seg_len = clip_duration / max(len(words), 1)
+        return [(w, round(i * seg_len, 2), round((i + 1) * seg_len, 2)) for i, w in enumerate(words)]
+
+    keyword_timings: list[tuple[str, float, float]] = []
+    seen_words: set[str] = set()
+
+    for seg in segments:
+        seg_words = extract_keywords(seg.text, max_keywords=2)
+        rel_start = max(0.0, round(seg.start_time - clip.start_time, 2))
+        rel_end = min(clip_duration, max(rel_start + 2.5, round(seg.end_time - clip.start_time, 2)))
+
+        for kw in seg_words:
+            if kw not in seen_words:
+                seen_words.add(kw)
+                keyword_timings.append((kw, rel_start, rel_end))
+                if len(keyword_timings) >= max_keywords:
+                    break
+        if len(keyword_timings) >= max_keywords:
+            break
+
+    return keyword_timings
 
 
 async def auto_source_broll(db: Session, clip: Clip) -> list[BrollAsset]:
-    """Automatically source and attach B-roll footage to `clip`.
+    """Automatically source and attach B-roll footage timed precisely to spoken words.
 
-    Extracts keywords from the clip's caption (falling back to overlapping
-    transcript segments), searches both Pexels and Pixabay for each
-    keyword, picks the top available result per keyword, and creates
-    BrollAsset rows spaced evenly across the clip's [start_time, end_time].
+    Extracts keywords from the clip's transcript segments along with their
+    spoken timestamps, searches Pexels and Pixabay, and inserts BrollAsset
+    rows positioned exactly at the moment each keyword is spoken.
     """
 
-    text = _extract_clip_text(clip)
-    keywords = extract_keywords(text, max_keywords=3)
-    if not keywords:
+    kw_timings = _extract_keywords_with_timing(clip, max_keywords=3)
+    if not kw_timings:
         logger.info("No keywords extracted for clip_id=%s; skipping auto-source", clip.id)
         return []
 
     search_results = await asyncio.gather(
-        *(_search_all_providers(keyword) for keyword in keywords)
+        *(_search_all_providers(kw) for kw, _, _ in kw_timings)
     )
 
-    picks: list[dict] = [results[0] for results in search_results if results]
-    if not picks:
-        logger.info(
-            "No B-roll results found for any keyword on clip_id=%s (keywords=%s)",
-            clip.id,
-            keywords,
-        )
-        return []
-
-    duration = clip.end_time - clip.start_time
-    segment_length = duration / len(picks) if picks else 0.0
-
     created: list[BrollAsset] = []
-    for index, pick in enumerate(picks):
-        # Relative to the clip's own timeline (0 = clip start), matching
-        # how app.services.video_render interprets position_start/end --
-        # NOT clip.start_time's absolute position in the source video.
-        position_start = index * segment_length
-        position_end = (index + 1) * segment_length
+    for (kw, pos_start, pos_end), results in zip(kw_timings, search_results):
+        if not results:
+            continue
+        pick = results[0]
         asset = BrollAsset(
             clip_id=clip.id,
             source=BrollSource(pick["source"]),
             source_asset_id=pick["source_asset_id"],
             asset_url=pick["asset_url"],
-            keyword=pick["keyword"],
-            position_start=position_start,
-            position_end=position_end,
+            keyword=kw,
+            position_start=pos_start,
+            position_end=pos_end,
         )
         db.add(asset)
         created.append(asset)
 
-    db.commit()
-    for asset in created:
-        db.refresh(asset)
+    if created:
+        db.commit()
+        for asset in created:
+            db.refresh(asset)
     return created
 
 

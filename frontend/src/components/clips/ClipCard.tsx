@@ -1,7 +1,9 @@
 import { motion } from 'framer-motion';
-import { Clock, Film, Trash2 } from 'lucide-react';
+import { Clock, Trash2, Play, Download } from 'lucide-react';
 import { Link } from 'react-router-dom';
 import { cn } from '@/lib/utils';
+import { computeViralityInsights } from '@/lib/virality';
+import { ViralityScoreBadge } from '@/components/clips/ViralityScoreBadge';
 import type { Clip, ClipStatus } from '@/types';
 
 export interface ClipCardProps {
@@ -12,9 +14,9 @@ export interface ClipCardProps {
 
 const STATUS_STYLES: Record<ClipStatus, string> = {
   draft: 'bg-muted text-muted-foreground',
-  rendering: 'bg-accent text-accent-foreground',
-  ready: 'bg-primary/15 text-primary',
-  failed: 'bg-destructive/15 text-destructive',
+  rendering: 'bg-amber-500/15 text-amber-400 border-amber-500/30',
+  ready: 'bg-emerald-500/15 text-emerald-400 border-emerald-500/30',
+  failed: 'bg-destructive/15 text-destructive border-destructive/30',
 };
 
 function formatDuration(seconds: number): string {
@@ -24,20 +26,17 @@ function formatDuration(seconds: number): string {
   return `${mins}:${secs.toString().padStart(2, '0')}`;
 }
 
-/**
- * A single clip tile: thumbnail (or placeholder), title, status badge,
- * duration, and a delete action. Clicking the card navigates to the
- * clip editor at /clips/{id}.
- */
 export function ClipCard({ clip, onDelete, className }: ClipCardProps) {
-  const duration = formatDuration(clip.end_time - clip.start_time);
+  const rawDuration = clip.end_time - clip.start_time;
+  const duration = formatDuration(rawDuration);
+  const virality = computeViralityInsights(clip.caption_text || clip.title, rawDuration);
 
   return (
     <motion.div
       whileHover={{ scale: 1.02, y: -4 }}
       transition={{ duration: 0.2, ease: 'easeOut' }}
       className={cn(
-        'group relative overflow-hidden rounded-2xl border border-border bg-card shadow-md',
+        'group relative flex flex-col overflow-hidden rounded-2xl border border-glass-border bg-card shadow-lg backdrop-blur-md transition-all',
         className,
       )}
     >
@@ -49,13 +48,14 @@ export function ClipCard({ clip, onDelete, className }: ClipCardProps) {
           onDelete?.(clip.id);
         }}
         aria-label={`Delete ${clip.title}`}
-        className="absolute right-2 top-2 z-10 rounded-full bg-black/50 p-1.5 text-white opacity-0 transition-opacity hover:bg-destructive focus-visible:opacity-100 group-hover:opacity-100"
+        className="absolute right-3 top-3 z-20 rounded-full bg-black/60 p-2 text-white opacity-0 transition-opacity hover:bg-destructive focus-visible:opacity-100 group-hover:opacity-100"
       >
-        <Trash2 className="h-4 w-4" />
+        <Trash2 className="h-3.5 w-3.5" />
       </button>
 
-      <Link to={`/clips/${clip.id}`} className="block">
-        <div className="flex aspect-video items-center justify-center bg-muted">
+      <Link to={`/clips/${clip.id}`} className="flex flex-col flex-1">
+        {/* 9:16 vertical short thumbnail ratio */}
+        <div className="relative flex aspect-[9/16] max-h-64 w-full items-center justify-center bg-black/70 overflow-hidden">
           {clip.thumbnail_path ? (
             <img
               src={clip.thumbnail_path}
@@ -63,27 +63,50 @@ export function ClipCard({ clip, onDelete, className }: ClipCardProps) {
               className="h-full w-full object-cover"
             />
           ) : (
-            <Film className="h-10 w-10 text-muted-foreground" />
+            <div className="flex flex-col items-center gap-2 text-muted-foreground p-4 text-center">
+              <div className="flex h-12 w-12 items-center justify-center rounded-full bg-primary/20 text-primary">
+                <Play className="h-6 w-6 ml-0.5" />
+              </div>
+              <span className="text-[11px] font-mono text-muted-foreground">9:16 Short Clip</span>
+            </div>
           )}
+
+          {/* Top-left status badge */}
+          <span
+            className={cn(
+              'absolute left-3 top-3 rounded-full border px-2.5 py-0.5 text-[10px] font-semibold capitalize backdrop-blur-md',
+              STATUS_STYLES[clip.status],
+            )}
+          >
+            {clip.status}
+          </span>
+
+          {/* Bottom-right duration badge */}
+          <div className="absolute bottom-3 right-3 flex items-center gap-1 rounded-full bg-black/80 px-2 py-0.5 text-[10px] font-mono text-white backdrop-blur-md">
+            <Clock className="h-3 w-3" />
+            <span>{duration}</span>
+          </div>
         </div>
 
-        <div className="space-y-2 p-4">
-          <div className="flex items-center justify-between gap-2">
-            <h3 className="truncate text-sm font-semibold text-foreground">
+        {/* Card Body */}
+        <div className="flex flex-1 flex-col justify-between p-4 gap-3">
+          <div className="space-y-1.5">
+            <h3 className="line-clamp-2 text-sm font-semibold text-foreground leading-snug">
               {clip.title}
             </h3>
-            <span
-              className={cn(
-                'shrink-0 rounded-full px-2 py-0.5 text-xs font-medium capitalize',
-                STATUS_STYLES[clip.status],
-              )}
-            >
-              {clip.status}
-            </span>
+            {clip.caption_text && (
+              <p className="line-clamp-1 text-xs text-muted-foreground italic">
+                &ldquo;{clip.caption_text}&rdquo;
+              </p>
+            )}
           </div>
-          <div className="flex items-center gap-1 text-xs text-muted-foreground">
-            <Clock className="h-3.5 w-3.5" />
-            <span>{duration}</span>
+
+          <div className="pt-2 border-t border-glass-border flex items-center justify-between gap-2">
+            <ViralityScoreBadge insights={virality} size="sm" />
+            <span className="flex items-center gap-1 rounded-full bg-primary/10 px-2.5 py-1 text-[11px] font-semibold text-primary group-hover:bg-primary group-hover:text-white transition-colors">
+              <Download className="h-3 w-3" />
+              {clip.status === 'ready' ? 'Download' : 'Export 9:16'}
+            </span>
           </div>
         </div>
       </Link>

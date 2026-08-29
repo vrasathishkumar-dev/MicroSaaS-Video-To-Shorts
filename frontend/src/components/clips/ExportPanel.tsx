@@ -115,56 +115,119 @@ export function ExportPanel({ clipId }: { clipId: number }) {
   };
 
   return (
-    <GlassCard className="space-y-4">
-      <h3 className="text-lg font-semibold">Export</h3>
+    <GlassCard className="space-y-5">
+      <div className="flex items-center justify-between border-b border-glass-border pb-3">
+        <div>
+          <h3 className="text-base font-bold text-foreground">9:16 Video Export & Download</h3>
+          <p className="text-xs text-muted-foreground mt-0.5">
+            Render vertical Short with burned-in animated subtitles and B-roll.
+          </p>
+        </div>
+        <span className="rounded-full bg-primary/10 px-2.5 py-1 text-[11px] font-semibold text-primary">
+          1080 &times; 1920 HD
+        </span>
+      </div>
+
+      {/* Export Specifications Box */}
+      <div className="grid grid-cols-2 sm:grid-cols-3 gap-2.5 rounded-xl bg-background/50 border border-glass-border p-3 text-xs">
+        <div>
+          <span className="text-muted-foreground block text-[10px]">Aspect Ratio</span>
+          <span className="font-semibold text-foreground">9:16 (Shorts / Reels)</span>
+        </div>
+        <div>
+          <span className="text-muted-foreground block text-[10px]">Resolution</span>
+          <span className="font-semibold text-foreground">1080 &times; 1920 MP4</span>
+        </div>
+        <div>
+          <span className="text-muted-foreground block text-[10px]">Audio</span>
+          <span className="font-semibold text-foreground">Stereo AAC 48kHz</span>
+        </div>
+      </div>
 
       {isCheckingStatus ? (
-        <div className="flex items-center gap-2 text-sm text-muted-foreground">
-          <Loader2 className="h-4 w-4 animate-spin" />
+        <div className="flex items-center justify-center gap-2 py-6 text-sm text-muted-foreground">
+          <Loader2 className="h-4 w-4 animate-spin text-primary" />
           <span>Checking export status…</span>
         </div>
       ) : (
-        <>
+        <div className="space-y-4">
           {status === 'idle' && (
-            <GradientButton onClick={handleExport} disabled={isStarting}>
-              {isStarting ? (
-                <Loader2 className="h-4 w-4 animate-spin" />
-              ) : null}
-              Export (9:16)
-            </GradientButton>
+            <div className="space-y-3">
+              <GradientButton
+                onClick={handleExport}
+                disabled={isStarting}
+                className="w-full py-3 text-sm font-semibold shadow-lg"
+              >
+                {isStarting ? (
+                  <Loader2 className="h-4 w-4 animate-spin mr-1.5" />
+                ) : (
+                  <Download className="h-4 w-4 mr-1.5" />
+                )}
+                Export (9:16)
+              </GradientButton>
+              <p className="text-center text-[11px] text-muted-foreground">
+                Renders high-quality 9:16 MP4 with selected caption style and B-roll overlays.
+              </p>
+            </div>
           )}
 
           {status === 'rendering' && (
-            <div className="flex items-center gap-2 text-sm text-muted-foreground">
-              <Loader2 className="h-4 w-4 animate-spin" />
-              <span>Rendering your 9:16 clip…</span>
+            <div className="rounded-xl border border-primary/30 bg-primary/10 p-5 text-center space-y-3">
+              <div className="flex items-center justify-center gap-2 text-primary font-semibold text-sm">
+                <Loader2 className="h-5 w-5 animate-spin" />
+                <span>Rendering your 9:16 clip…</span>
+              </div>
+              <p className="text-xs text-muted-foreground">
+                FFmpeg is compositing video, burning subtitles, and overlaying B-roll footage.
+              </p>
+              <div className="h-2 w-full overflow-hidden rounded-full bg-muted">
+                <div className="h-full w-2/3 animate-pulse rounded-full bg-primary" />
+              </div>
             </div>
           )}
 
           {status === 'ready' && (
-            <GradientButton onClick={handleDownload} disabled={isDownloading}>
-              {isDownloading ? (
-                <Loader2 className="h-4 w-4 animate-spin" />
-              ) : (
-                <Download className="h-4 w-4" />
-              )}
-              Download
-            </GradientButton>
+            <div className="space-y-3">
+              <div className="rounded-xl border border-emerald-500/30 bg-emerald-500/10 p-3.5 text-center text-xs text-emerald-400 font-medium">
+                ✨ Your 9:16 vertical Short is rendered and ready for download!
+              </div>
+              <GradientButton
+                onClick={handleDownload}
+                disabled={isDownloading}
+                className="w-full py-3 text-sm font-bold bg-gradient-to-r from-emerald-500 to-teal-500 text-white shadow-lg hover:opacity-95"
+              >
+                {isDownloading ? (
+                  <Loader2 className="h-4 w-4 animate-spin mr-1.5" />
+                ) : (
+                  <Download className="h-4 w-4 mr-1.5" />
+                )}
+                Download
+              </GradientButton>
+              <button
+                type="button"
+                onClick={handleExport}
+                disabled={isStarting}
+                className="w-full text-center text-xs text-muted-foreground hover:text-foreground transition-colors underline pt-1"
+              >
+                Re-export with new edits
+              </button>
+            </div>
           )}
 
           {status === 'failed' && (
             <div className="space-y-3">
-              <div className="flex items-center gap-2 text-sm text-destructive">
-                <AlertCircle className="h-4 w-4" />
+              <div className="flex items-center gap-2 rounded-xl bg-destructive/15 p-3 text-xs text-destructive">
+                <AlertCircle className="h-4 w-4 shrink-0" />
                 <span>{errorMessage ?? 'Export failed.'}</span>
               </div>
               <GradientButton
                 variant="outline"
                 onClick={handleExport}
                 disabled={isStarting}
+                className="w-full"
               >
                 {isStarting ? (
-                  <Loader2 className="h-4 w-4 animate-spin" />
+                  <Loader2 className="h-4 w-4 animate-spin mr-1.5" />
                 ) : null}
                 Retry export
               </GradientButton>
@@ -172,9 +235,9 @@ export function ExportPanel({ clipId }: { clipId: number }) {
           )}
 
           {errorMessage && status !== 'failed' && (
-            <p className="text-sm text-destructive">{errorMessage}</p>
+            <p className="text-xs text-destructive bg-destructive/10 p-2.5 rounded-lg">{errorMessage}</p>
           )}
-        </>
+        </div>
       )}
     </GlassCard>
   );
