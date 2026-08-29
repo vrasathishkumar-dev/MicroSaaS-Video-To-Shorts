@@ -1,0 +1,47 @@
+# Web framework
+fastapi>=0.109.0
+uvicorn[standard]>=0.27.0
+
+# Database
+sqlalchemy>=2.0.0
+alembic>=1.13.0
+psycopg2-binary>=2.9.9
+
+# Validation / settings
+pydantic>=2.5.0
+pydantic-settings>=2.1.0
+email-validator>=2.1.0
+
+# Auth
+python-jose[cryptography]>=3.3.0
+passlib[bcrypt]>=1.7.4
+bcrypt<4.1  # passlib 1.7.4's bcrypt backend probe breaks on bcrypt>=4.1 (missing __about__)
+
+# File uploads
+python-multipart>=0.0.6
+
+# HTTP client (Pexels / Pixabay / transcription APIs)
+httpx>=0.26.0
+
+# Environment variables
+python-dotenv>=1.0.0
+
+# Background task queue: real Redis-backed jobs when REDIS_URL is set,
+# falling back to FastAPI BackgroundTasks otherwise -- see app.services.task_queue
+redis>=5.0.0
+rq>=1.16.0
+
+# Testing
+pytest>=7.4.0
+pytest-cov>=4.1.0
+pytest-asyncio>=0.23.0
+
+# Linting / type checking
+ruff>=0.2.0
+mypy>=1.8.0
+
+# Video rendering (Export & Publish module; requires the ffmpeg CLI on PATH)
+ffmpeg-python>=0.2.0
+
+# Video downloader for URL sources (YouTube, Vimeo, TikTok, etc.)
+yt-dlp>=2024.0.0
