@@ -53,6 +53,11 @@ pnpm-debug.log*
 *.sln
 *.sw?
 
+# ---- Uploaded / rendered media -------------------------------------------
+# Source videos, rendered exports and poster frames are user data, not
+# source code -- they belong on a volume/object store, never in git.
+backend/uploads/
+
 # ---- Logs ---------------------------------------------------------------
 *.log
 logs/

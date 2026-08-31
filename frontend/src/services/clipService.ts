@@ -1,5 +1,5 @@
 import api, { API_URL, getAccessToken } from '@/services/api';
-import type { Clip, PaginatedResponse } from '@/types';
+import type { Clip, ClipFraming, PaginatedResponse } from '@/types';
 
 export interface UpdateClipPayload {
   title?: string;
@@ -43,6 +43,17 @@ export function getClipPreviewUrl(clipId: number): string {
 }
 
 /**
+ * URL for a clip's exported poster frame. Only present once the clip has
+ * been rendered (`thumbnail_path` is set); uses the same `?token=` scheme
+ * as the preview URL since an <img> can't send an Authorization header.
+ */
+export function getClipThumbnailUrl(clipId: number): string {
+  const token = getAccessToken();
+  const query = token ? `?token=${encodeURIComponent(token)}` : '';
+  return `${API_URL}/api/v1/clips/${clipId}/thumbnail${query}`;
+}
+
+/**
  * Kick off clip generation for a video project. Returns the newly
  * created clips.
  */
@@ -70,4 +81,14 @@ export async function reorderClip(id: number, orderIndex: number): Promise<Clip>
 
 export async function deleteClip(id: number): Promise<void> {
   await api.delete(`/clips/${id}`);
+}
+
+/**
+ * Where the speaker sits in a clip's source footage, so the editor's
+ * Speaker Focus preview crops to the same window the export will render.
+ * The backend probes the footage on first call and caches the result.
+ */
+export async function getClipFraming(clipId: number): Promise<ClipFraming> {
+  const { data } = await api.get<ClipFraming>(`/clips/${clipId}/framing`);
+  return data;
 }

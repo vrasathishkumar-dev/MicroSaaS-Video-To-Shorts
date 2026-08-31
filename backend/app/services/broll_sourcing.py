@@ -47,6 +47,33 @@ _STOPWORDS: frozenset[str] = frozenset(
 _WORD_RE = re.compile(r"[A-Za-z']+")
 
 
+# The export canvas is 1080x1920, so a B-roll file wider than this buys
+# nothing but download time and decode cost.
+_MAX_BROLL_WIDTH = 1920
+
+
+def _best_pexels_file(video_files: list[dict]) -> str | None:
+    """Pick the highest-resolution Pexels rendition worth downloading.
+
+    Pexels returns renditions in no useful order, and its first entry is
+    frequently a 640x360 SD file -- which looks soft blown up next to CRF 18
+    main footage. Prefer the largest file at or below the export canvas
+    width, falling back to the smallest oversized one if every rendition is
+    bigger than that.
+    """
+
+    usable = [f for f in video_files if f.get("link")]
+    if not usable:
+        return None
+
+    within_budget = [f for f in usable if (f.get("width") or 0) <= _MAX_BROLL_WIDTH]
+    if within_budget:
+        best = max(within_budget, key=lambda f: f.get("width") or 0)
+    else:
+        best = min(usable, key=lambda f: f.get("width") or 0)
+    return best.get("link")
+
+
 async def search_pexels(query: str, per_page: int = 10) -> list[dict]:
     """Search Pexels video library for `query`, returning normalized results.
 
@@ -77,7 +104,7 @@ async def search_pexels(query: str, per_page: int = 10) -> list[dict]:
     results: list[dict] = []
     for video in data.get("videos", []):
         video_files = video.get("video_files") or []
-        asset_url = video_files[0].get("link") if video_files else video.get("url")
+        asset_url = _best_pexels_file(video_files) or video.get("url")
         if not asset_url:
             continue
         results.append(
@@ -125,8 +152,14 @@ async def search_pixabay(query: str, per_page: int = 10) -> list[dict]:
     results: list[dict] = []
     for hit in data.get("hits", []):
         videos = hit.get("videos") or {}
+        # Highest quality first: B-roll is composited onto a 1080-wide
+        # canvas, and an upscaled "small" variant is visibly soft next to
+        # the CRF 18 main footage.
         variant = (
-            videos.get("medium") or videos.get("small") or videos.get("large") or videos.get("tiny")
+            videos.get("large")
+            or videos.get("medium")
+            or videos.get("small")
+            or videos.get("tiny")
         )
         asset_url = variant.get("url") if variant else None
         if not asset_url:

@@ -70,6 +70,43 @@ export interface Clip {
   updated_at: string;
 }
 
+/** One Speaker Focus crop window, as fractions (0-1) of the source frame. */
+export interface SpeakerFocusWindow {
+  start_time: number;
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}
+
+/**
+ * A stretch of the clip shown as stacked panes, one per speaker, with each
+ * pane filling the width and `1 / panes.length` of the height.
+ */
+export interface SplitScreenSection {
+  start_time: number;
+  end_time: number;
+  panes: SpeakerFocusWindow[];
+}
+
+/**
+ * Where the speaker is in a clip's source footage.
+ *
+ * `speaker_focus` means crop the preview to `windows`; `rendered` means the
+ * clip has already been exported to 9:16 and needs no further cropping;
+ * `unavailable` means no confident subject was found, and both preview and
+ * export fall back to blurred-fill framing.
+ *
+ * `split_sections` covers the stretches where more than one person is in
+ * the conversation: those play as stacked panes instead of `windows`.
+ */
+export interface ClipFraming {
+  clip_id: number;
+  mode: 'speaker_focus' | 'rendered' | 'unavailable';
+  windows: SpeakerFocusWindow[];
+  split_sections: SplitScreenSection[];
+}
+
 export type CaptionStylePreset =
   | 'hormozi'
   | 'neon'

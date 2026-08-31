@@ -45,3 +45,17 @@ ffmpeg-python>=0.2.0
 
 # Video downloader for URL sources (YouTube, Vimeo, TikTok, etc.)
 yt-dlp>=2024.0.0
+
+# Caption rasterisation: burns subtitles in as PNG overlays, so captions
+# don't depend on the local ffmpeg having been built with libass/libfreetype
+# (see app.services.caption_render)
+pillow>=10.0.0
+
+# Speaker-aware reframing: face detection picks who is talking and the 9:16
+# crop window that keeps them in frame (see app.services.reframe)
+numpy>=1.26.0
+# Pinned below 5.0: the face cascades reframe.py uses ship inside the 4.x
+# wheels (cv2.data.haarcascades), and OpenCV 5 dropped them. The headless
+# build is deliberate -- no GUI libs are needed on a render box. Without
+# this, reframing still runs on its skin-and-motion fallback.
+opencv-python-headless>=4.9,<5

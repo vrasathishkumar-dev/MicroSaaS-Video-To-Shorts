@@ -10,6 +10,7 @@ from __future__ import annotations
 from pathlib import Path
 from unittest.mock import patch
 
+import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy.orm import Session
 
@@ -298,4 +299,222 @@ class TestPreview:
         clip = _make_clip(db_session, test_user, status=ClipStatus.draft)
         token = create_access_token({"sub": str(test_user.id)})
         response = client.get(f"/api/v1/clips/{clip.id}/preview?token={token}")
+        assert response.status_code == 404
+
+
+class TestFraming:
+    """/clips/{id}/framing: the crop windows the Speaker Focus preview
+    applies, so the editor shows what the export will render.
+
+    `compute_speaker_framing` is patched at the router's import site --
+    the detection itself is covered in test_reframe.py against real
+    footage; what matters here is the endpoint contract."""
+
+    def _project_with_source(self, db_session: Session, user: User) -> Clip:
+        import app.services.storage as storage_module
+
+        source_file = storage_module.UPLOAD_ROOT / "videos" / "framing.mp4"
+        source_file.parent.mkdir(parents=True, exist_ok=True)
+        source_file.write_bytes(b"source video bytes")
+
+        project = VideoProject(
+            user_id=user.id,
+            title="Framing project",
+            source_type=SourceType.upload,
+            status=VideoProjectStatus.ready,
+            source_file_path="videos/framing.mp4",
+        )
+        db_session.add(project)
+        db_session.commit()
+        db_session.refresh(project)
+
+        clip = Clip(
+            video_project_id=project.id,
+            user_id=user.id,
+            title="Draft clip",
+            start_time=5.0,
+            end_time=45.0,
+            order_index=0,
+            status=ClipStatus.draft,
+        )
+        db_session.add(clip)
+        db_session.commit()
+        db_session.refresh(clip)
+        return clip
+
+    def test_windows_are_normalised_to_the_source_frame(
+        self,
+        client: TestClient,
+        auth_headers: dict[str, str],
+        test_user: User,
+        db_session: Session,
+    ) -> None:
+        from app.services.reframe import SpeakerFraming, SpeakerWindow
+
+        clip = self._project_with_source(db_session, test_user)
+        framing = SpeakerFraming(
+            source_width=1920,
+            source_height=1080,
+            crop_width=384,
+            crop_height=683,
+            windows=(
+                SpeakerWindow(start_time=0.0, x=960, y=270),
+                SpeakerWindow(start_time=12.5, x=192, y=200),
+            ),
+        )
+
+        with patch(
+            "app.routers.exports.compute_speaker_framing", return_value=framing
+        ) as compute:
+            response = client.get(
+                f"/api/v1/clips/{clip.id}/framing", headers=auth_headers
+            )
+
+        assert response.status_code == 200
+        body = response.json()
+        assert body["mode"] == "speaker_focus"
+        assert body["windows"][0] == {
+            "start_time": 0.0,
+            "x": 0.5,
+            "y": 0.25,
+            "width": 0.2,
+            "height": pytest.approx(683 / 1080),
+        }
+        assert body["windows"][1]["start_time"] == 12.5
+        # Analysed over the clip's own window, not the whole source.
+        assert compute.call_args.args[1:3] == (5.0, 40.0)
+
+    def test_footage_with_no_subject_reports_unavailable(
+        self,
+        client: TestClient,
+        auth_headers: dict[str, str],
+        test_user: User,
+        db_session: Session,
+    ) -> None:
+        clip = self._project_with_source(db_session, test_user)
+
+        with patch("app.routers.exports.compute_speaker_framing", return_value=None):
+            response = client.get(
+                f"/api/v1/clips/{clip.id}/framing", headers=auth_headers
+            )
+
+        assert response.status_code == 200
+        assert response.json() == {
+            "clip_id": clip.id,
+            "mode": "unavailable",
+            "windows": [],
+            "split_sections": [],
+        }
+
+    def test_split_screen_stretches_come_back_with_their_panes(
+        self,
+        client: TestClient,
+        auth_headers: dict[str, str],
+        test_user: User,
+        db_session: Session,
+    ) -> None:
+        """Two people talking: the preview needs the panes, in the same
+        normalised coordinates as the single-speaker windows, so it can
+        stack them the way the export will."""
+
+        from app.services.reframe import (
+            SpeakerFraming,
+            SpeakerWindow,
+            SplitFraming,
+            SplitSection,
+        )
+
+        clip = self._project_with_source(db_session, test_user)
+        framing = SpeakerFraming(
+            source_width=1920,
+            source_height=1080,
+            crop_width=384,
+            crop_height=683,
+            windows=(SpeakerWindow(start_time=0.0, x=960, y=270),),
+            split=SplitFraming(
+                pane_count=2,
+                crop_width=960,
+                crop_height=540,
+                sections=(
+                    SplitSection(
+                        start_time=0.0,
+                        end_time=12.0,
+                        panes=(
+                            SpeakerWindow(start_time=0.0, x=0, y=0),
+                            SpeakerWindow(start_time=0.0, x=960, y=540),
+                        ),
+                    ),
+                ),
+            ),
+        )
+
+        with patch(
+            "app.routers.exports.compute_speaker_framing", return_value=framing
+        ):
+            response = client.get(
+                f"/api/v1/clips/{clip.id}/framing", headers=auth_headers
+            )
+
+        assert response.status_code == 200
+        section = response.json()["split_sections"][0]
+        assert (section["start_time"], section["end_time"]) == (0.0, 12.0)
+        # Panes carry the split's own crop size, not the single window's.
+        assert section["panes"] == [
+            {"start_time": 0.0, "x": 0.0, "y": 0.0, "width": 0.5, "height": 0.5},
+            {"start_time": 0.0, "x": 0.5, "y": 0.5, "width": 0.5, "height": 0.5},
+        ]
+
+    def test_an_exported_clip_is_already_framed(
+        self,
+        client: TestClient,
+        auth_headers: dict[str, str],
+        test_user: User,
+        db_session: Session,
+        tmp_path: Path,
+    ) -> None:
+        """A ready clip's preview *is* the 9:16 export; cropping it again
+        would zoom in on a crop."""
+
+        rendered = tmp_path / "rendered.mp4"
+        rendered.write_bytes(b"rendered clip bytes")
+        clip = _make_clip(
+            db_session,
+            test_user,
+            status=ClipStatus.ready,
+            video_file_path=str(rendered),
+        )
+
+        with patch("app.routers.exports.compute_speaker_framing") as compute:
+            response = client.get(
+                f"/api/v1/clips/{clip.id}/framing", headers=auth_headers
+            )
+
+        assert response.status_code == 200
+        assert response.json()["mode"] == "rendered"
+        compute.assert_not_called()
+
+    def test_other_users_clip_404(
+        self,
+        client: TestClient,
+        auth_headers: dict[str, str],
+        db_session: Session,
+        other_user: User,
+    ) -> None:
+        clip = _make_clip(db_session, other_user)
+
+        response = client.get(f"/api/v1/clips/{clip.id}/framing", headers=auth_headers)
+
+        assert response.status_code == 404
+
+    def test_missing_source_file_404(
+        self,
+        client: TestClient,
+        auth_headers: dict[str, str],
+        test_user: User,
+        db_session: Session,
+    ) -> None:
+        clip = _make_clip(db_session, test_user, status=ClipStatus.draft)
+
+        response = client.get(f"/api/v1/clips/{clip.id}/framing", headers=auth_headers)
+
         assert response.status_code == 404

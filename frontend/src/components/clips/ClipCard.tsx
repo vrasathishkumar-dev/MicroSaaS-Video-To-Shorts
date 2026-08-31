@@ -3,6 +3,7 @@ import { Clock, Trash2, Play, Download } from 'lucide-react';
 import { Link } from 'react-router-dom';
 import { cn } from '@/lib/utils';
 import { computeViralityInsights } from '@/lib/virality';
+import { getClipThumbnailUrl } from '@/services/clipService';
 import { ViralityScoreBadge } from '@/components/clips/ViralityScoreBadge';
 import type { Clip, ClipStatus } from '@/types';
 
@@ -58,7 +59,7 @@ export function ClipCard({ clip, onDelete, className }: ClipCardProps) {
         <div className="relative flex aspect-[9/16] max-h-64 w-full items-center justify-center bg-black/70 overflow-hidden">
           {clip.thumbnail_path ? (
             <img
-              src={clip.thumbnail_path}
+              src={getClipThumbnailUrl(clip.id)}
               alt={clip.title}
               className="h-full w-full object-cover"
             />

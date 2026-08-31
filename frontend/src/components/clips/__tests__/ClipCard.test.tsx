@@ -47,13 +47,15 @@ describe('ClipCard', () => {
     expect(screen.queryByRole('img')).not.toBeInTheDocument();
   });
 
-  it('renders the thumbnail image when provided', () => {
+  it('renders the exported poster frame once the clip has a thumbnail', () => {
+    // thumbnail_path is a server-side path, so the card loads the poster
+    // through the authenticated /clips/:id/thumbnail endpoint instead.
     renderClipCard({
-      clip: { ...baseClip, thumbnail_path: 'https://example.com/thumb.jpg' },
+      clip: { ...baseClip, thumbnail_path: '/uploads/exports/abc.jpg' },
     });
     expect(screen.getByRole('img', { name: 'Best Moment' })).toHaveAttribute(
       'src',
-      'https://example.com/thumb.jpg',
+      expect.stringContaining('/api/v1/clips/7/thumbnail'),
     );
   });
 

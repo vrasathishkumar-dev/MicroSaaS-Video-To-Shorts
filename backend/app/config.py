@@ -58,6 +58,46 @@ class Settings(BaseSettings):
     # tests, which don't want a real Redis dependency).
     REDIS_URL: str = ""
 
+    # ---- Render / export quality -------------------------------------
+    # Defaults follow YouTube's recommended Shorts upload spec so an
+    # exported clip can be uploaded without a lossy re-encode round trip.
+    # Consumed by app.services.video_render.
+    RENDER_WIDTH: int = 1080
+    RENDER_HEIGHT: int = 1920
+    RENDER_FPS: int = 30
+    # x264 constant-rate-factor: lower = higher quality/larger file.
+    # 18 is visually transparent for short-form; 20-23 is fine for drafts.
+    RENDER_CRF: int = 18
+    RENDER_PRESET: str = "slow"
+    # How a non-9:16 source is fitted:
+    #   "auto"  - track the speaker and crop the frame around them (default)
+    #   "blur"  - fit the whole frame over a blurred fill
+    #   "crop"  - centre-crop to fill (ignores where the subject actually is)
+    #   "pad"   - plain black letterbox
+    RENDER_FRAMING: str = "auto"
+    RENDER_BLUR_SIGMA: int = 30
+    # Source B-roll automatically when a clip is exported with none
+    # attached. The inserted assets stay editable/removable in the clip
+    # editor, per the B-roll module's rules.
+    BROLL_AUTO_ON_EXPORT: bool = True
+    # How B-roll is composited: "pip" (inset card) or "fullscreen" (cutaway).
+    RENDER_BROLL_MODE: str = "pip"
+    RENDER_PIP_WIDTH_RATIO: float = 0.33
+    # Caption font size and bottom margin, as a fraction of frame height.
+    # The margin keeps captions clear of the YouTube Shorts UI overlay.
+    RENDER_CAPTION_SCALE: float = 0.036
+    RENDER_CAPTION_MARGIN_RATIO: float = 0.17
+    RENDER_CAPTION_FONT: str = "DejaVu Sans"
+    # Short-form captions are often set in caps; off by default because
+    # sentence case reads better for long-form speech.
+    RENDER_CAPTION_UPPERCASE: bool = False
+    # Optional explicit font file for the drawtext caption fallback; when
+    # empty a known system font is auto-detected.
+    RENDER_CAPTION_FONT_FILE: str = ""
+    RENDER_AUDIO_BITRATE: str = "192k"
+    # YouTube normalises playback to roughly -14 LUFS.
+    RENDER_AUDIO_LUFS: float = -14.0
+
 
 @lru_cache
 def get_settings() -> Settings:

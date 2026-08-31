@@ -23,9 +23,19 @@ import { TrimControls } from '@/components/clips/TrimControls';
 import { ViralityScoreBadge } from '@/components/clips/ViralityScoreBadge';
 import { GlassCard } from '@/components/ui/GlassCard';
 import { PageWrapper } from '@/components/ui/PageWrapper';
+import {
+  activeSpeakerWindow,
+  activeSplitSection,
+  speakerFocusStyle,
+} from '@/lib/framing';
 import { computeViralityInsights } from '@/lib/virality';
 import { cn } from '@/lib/utils';
-import { getClip, getClipPreviewUrl, updateClip } from '@/services/clipService';
+import {
+  getClip,
+  getClipFraming,
+  getClipPreviewUrl,
+  updateClip,
+} from '@/services/clipService';
 import { getClipBrollAssets } from '@/services/brollService';
 import { getTranscript } from '@/services/videoService';
 import {
@@ -33,7 +43,13 @@ import {
   getExportStatus,
   downloadClip,
 } from '@/services/exportService';
-import type { CaptionStylePreset, Clip, TranscriptSegment, BrollAsset } from '@/types';
+import type {
+  BrollAsset,
+  CaptionStylePreset,
+  Clip,
+  ClipFraming,
+  TranscriptSegment,
+} from '@/types';
 
 export type FramingMode = 'speaker_focus' | 'dynamic_blur' | 'fit';
 
@@ -44,6 +60,7 @@ export function ClipEditorPage() {
   const [clip, setClip] = useState<Clip | null>(null);
   const [transcriptSegments, setTranscriptSegments] = useState<TranscriptSegment[]>([]);
   const [brollAssets, setBrollAssets] = useState<BrollAsset[]>([]);
+  const [framing, setFraming] = useState<ClipFraming | null>(null);
   const [framingMode, setFramingMode] = useState<FramingMode>('speaker_focus');
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -59,6 +76,10 @@ export function ClipEditorPage() {
   const [isDownloading, setIsDownloading] = useState(false);
 
   const videoRef = useRef<HTMLVideoElement>(null);
+  // The lower half of a split screen. Same source file, muted, dragged
+  // along by the main element -- two <video> tags is far less machinery
+  // than compositing frames onto a canvas just to preview a layout.
+  const secondPaneRef = useRef<HTMLVideoElement>(null);
 
   // Load initial export status
   useEffect(() => {
@@ -107,6 +128,28 @@ export function ClipEditorPage() {
   useEffect(() => {
     void loadClip();
   }, [loadClip]);
+
+  // Where the speaker is, so Speaker Focus crops to the person rather than
+  // to the middle of the frame. Re-probed when the trim moves, since the
+  // windows are analysed over the clip's own range. Non-blocking: the
+  // preview falls back to a centred zoom if the probe fails.
+  const clipStart = clip?.start_time;
+  const clipEnd = clip?.end_time;
+  const clipStatus = clip?.status;
+  useEffect(() => {
+    if (!Number.isFinite(clipId) || clipStart === undefined) return;
+    let current = true;
+    getClipFraming(clipId)
+      .then((data) => {
+        if (current) setFraming(data);
+      })
+      .catch(() => {
+        if (current) setFraming(null);
+      });
+    return () => {
+      current = false;
+    };
+  }, [clipId, clipStart, clipEnd, clipStatus]);
 
   const handleTrimSave = async (startTime: number, endTime: number) => {
     if (!clip) return;
@@ -232,6 +275,42 @@ export function ClipEditorPage() {
     (b) => relativeTime >= b.position_start && relativeTime <= b.position_end
   );
 
+  // Speaker Focus: crop the preview to the window the renderer will use,
+  // which follows the person and steps at the source's own cuts. When the
+  // backend found no confident subject the style is undefined and the
+  // preview falls back to a centred zoom -- the export falls back to
+  // blurred fill for the same reason.
+  const speakerWindow =
+    framing?.mode === 'speaker_focus'
+      ? activeSpeakerWindow(framing.windows, relativeTime)
+      : null;
+  const speakerStyle =
+    framingMode === 'speaker_focus' ? speakerFocusStyle(speakerWindow) : undefined;
+
+  // Where two people are in the conversation the export stacks them, so
+  // the preview does too: the main element takes the top pane and a muted
+  // twin takes the bottom one.
+  const splitSection =
+    framingMode === 'speaker_focus' && framing?.mode === 'speaker_focus'
+      ? activeSplitSection(framing.split_sections, relativeTime)
+      : null;
+  const hasSplitScreen = (framing?.split_sections.length ?? 0) > 0;
+  const topPaneStyle = splitSection
+    ? speakerFocusStyle(splitSection.panes[0])
+    : speakerStyle;
+  const bottomPaneStyle = splitSection
+    ? speakerFocusStyle(splitSection.panes[1] ?? splitSection.panes[0])
+    : undefined;
+
+  /** Keep the bottom pane on the same frame as the one being played. */
+  const syncSecondPane = (time: number, playing: boolean) => {
+    const pane = secondPaneRef.current;
+    if (!pane) return;
+    if (Math.abs(pane.currentTime - time) > 0.3) pane.currentTime = time;
+    if (playing && pane.paused) void pane.play().catch(() => undefined);
+    if (!playing && !pane.paused) pane.pause();
+  };
+
   return (
     <PageWrapper className="mx-auto max-w-6xl px-4 py-8 space-y-6">
       {/* Studio Header */}
@@ -356,37 +435,78 @@ export function ClipEditorPage() {
                   </div>
                 )}
 
-                {/* Main Video Element with Speaker Centering */}
-                <video
-                  ref={videoRef}
-                  key={clip.id}
-                  src={getClipPreviewUrl(clip.id)}
-                  playsInline
+                {/* Speaker panes: one, or two stacked while both talk.
+                    Both panes stay mounted and only change height, so
+                    cutting to a split screen never reloads the player. */}
+                <div
                   className={cn(
-                    'h-full w-full transition-transform duration-500',
-                    framingMode === 'speaker_focus'
-                      ? 'object-cover scale-125 object-center'
-                      : framingMode === 'dynamic_blur'
-                        ? 'object-contain relative z-10'
-                        : 'object-contain'
+                    'absolute inset-0 flex flex-col',
+                    framingMode === 'dynamic_blur' && 'z-10'
                   )}
-                  onError={() => setPreviewFailed(true)}
-                  onPlay={() => setIsPlaying(true)}
-                  onPause={() => setIsPlaying(false)}
-                  onLoadedMetadata={(event) => {
-                    if (clip.status !== 'ready') {
-                      event.currentTarget.currentTime = clip.start_time;
-                    }
-                  }}
-                  onTimeUpdate={(event) => {
-                    const curr = event.currentTarget.currentTime;
-                    setCurrentTime(curr);
-                    if (clip.status !== 'ready' && curr >= clip.end_time) {
-                      event.currentTarget.pause();
-                      event.currentTarget.currentTime = clip.start_time;
-                    }
-                  }}
-                />
+                >
+                  <div
+                    className="relative overflow-hidden transition-all duration-300"
+                    style={{ height: splitSection ? '50%' : '100%' }}
+                  >
+                    <video
+                      ref={videoRef}
+                      key={clip.id}
+                      src={getClipPreviewUrl(clip.id)}
+                      playsInline
+                      style={topPaneStyle}
+                      className={cn(
+                        'transition-all duration-500',
+                        topPaneStyle
+                          ? 'object-cover'
+                          : framingMode === 'speaker_focus'
+                            ? 'h-full w-full object-cover scale-125 object-center'
+                            : 'h-full w-full object-contain'
+                      )}
+                      onError={() => setPreviewFailed(true)}
+                      onPlay={(event) => {
+                        setIsPlaying(true);
+                        syncSecondPane(event.currentTarget.currentTime, true);
+                      }}
+                      onPause={(event) => {
+                        setIsPlaying(false);
+                        syncSecondPane(event.currentTarget.currentTime, false);
+                      }}
+                      onLoadedMetadata={(event) => {
+                        if (clip.status !== 'ready') {
+                          event.currentTarget.currentTime = clip.start_time;
+                        }
+                      }}
+                      onTimeUpdate={(event) => {
+                        const curr = event.currentTarget.currentTime;
+                        setCurrentTime(curr);
+                        if (clip.status !== 'ready' && curr >= clip.end_time) {
+                          event.currentTarget.pause();
+                          event.currentTarget.currentTime = clip.start_time;
+                        }
+                        syncSecondPane(curr, !event.currentTarget.paused);
+                      }}
+                    />
+                  </div>
+
+                  {/* Loaded only for a clip that actually has a split, so
+                      a single-speaker preview streams the source once. */}
+                  <div
+                    className="relative overflow-hidden transition-all duration-300"
+                    style={{ height: splitSection ? '50%' : '0%' }}
+                  >
+                    {hasSplitScreen && (
+                      <video
+                        ref={secondPaneRef}
+                        src={getClipPreviewUrl(clip.id)}
+                        playsInline
+                        muted
+                        preload="auto"
+                        style={bottomPaneStyle}
+                        className="object-cover transition-all duration-500"
+                      />
+                    )}
+                  </div>
+                </div>
 
                 {/* Live Word-Synced B-Roll Overlay */}
                 {activeBroll && (
@@ -471,6 +591,12 @@ export function ClipEditorPage() {
 
           <p className="mt-3 text-xs text-muted-foreground text-center">
             9:16 Vertical Short Preview &bull; {duration.toFixed(1)}s Duration
+            {framingMode === 'speaker_focus' && framing?.mode === 'unavailable' && (
+              <> &bull; No speaker detected &mdash; exporting with blurred fill</>
+            )}
+            {splitSection && (
+              <> &bull; Split screen &mdash; {splitSection.panes.length} speakers talking</>
+            )}
           </p>
         </div>
 

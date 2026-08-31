@@ -1,9 +1,7 @@
 """FastAPI application entrypoint.
 
-Wires together CORS, global exception handlers, the health check, and
-(eventually) all API routers. Business-logic routers are added by other
-agents in a later phase; the include_router() calls below are placeholders
-showing where they will be registered.
+Wires together CORS, global exception handlers, the liveness/readiness
+probes, and every API router under the /api/v1 prefix.
 """
 
 from __future__ import annotations
@@ -12,8 +10,11 @@ import logging
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
+from sqlalchemy import text
 
 from app.config import settings
+from app.database import engine
 from app.exceptions import (
     AppException,
     app_exception_handler,
@@ -58,6 +59,48 @@ app.include_router(admin.router, prefix="/api/v1")
 
 @app.get("/health")
 async def health() -> dict[str, str]:
-    """Liveness/readiness probe."""
+    """Liveness probe: the process is up and serving.
+
+    Deliberately dependency-free so an orchestrator doesn't restart a
+    healthy API just because the database blipped -- that's what /ready is
+    for.
+    """
 
     return {"status": "ok"}
+
+
+@app.get("/ready")
+async def ready() -> JSONResponse:
+    """Readiness probe: the API can actually serve traffic.
+
+    Checks the database round-trips, and (when a queue is configured) that
+    Redis is reachable -- without it, exports would be accepted and then
+    never rendered. Returns 503 so a load balancer takes the instance out
+    of rotation instead of sending it doomed requests.
+    """
+
+    checks: dict[str, str] = {}
+
+    try:
+        with engine.connect() as connection:
+            connection.execute(text("SELECT 1"))
+        checks["database"] = "ok"
+    except Exception as exc:
+        logger.warning("Readiness check failed for database: %s", exc)
+        checks["database"] = "unavailable"
+
+    if settings.REDIS_URL:
+        try:
+            import redis
+
+            redis.from_url(settings.REDIS_URL, socket_connect_timeout=2).ping()
+            checks["queue"] = "ok"
+        except Exception as exc:
+            logger.warning("Readiness check failed for redis: %s", exc)
+            checks["queue"] = "unavailable"
+
+    healthy = all(value == "ok" for value in checks.values())
+    return JSONResponse(
+        status_code=200 if healthy else 503,
+        content={"status": "ready" if healthy else "degraded", "checks": checks},
+    )
