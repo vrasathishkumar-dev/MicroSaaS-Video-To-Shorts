@@ -1,21 +1,29 @@
-"""Heuristic highlight-detection for transcript segments.
+"""Picking the moments worth turning into shorts.
 
-MVP implementation: no external ML model or API call. Each segment is
-scored using cheap, explainable heuristics:
+No ML model or API call: cheap, explainable heuristics over the real
+transcript. What changed the thinking here is that a short is a *window*,
+not a sentence. Whisper hands back segments a second or two long, so
+scoring them individually asks the wrong question -- "is this sentence
+good?" -- when the one that matters is "if a short started here, would
+anyone watch it?".
 
-  - keyword density: presence of words that often signal an engaging,
-    quotable, or emotionally charged moment ("secret", "never", "biggest",
-    "mistake", ...).
-  - duration fit: segments close to a typical short-form clip length score
-    higher than ones that are too short (fragmentary) or too long.
-  - sentence completeness: segments that read as a complete sentence
-    (capitalized start, terminal punctuation) score higher than a mid-
-    sentence fragment.
+So each segment is scored as the opening of the ~40 seconds that follow it:
 
-This module's public function signature is intentionally narrow
-(`detect_highlights(segments) -> segments`, mutating `is_highlight` /
-`highlight_score` in place) so it can later be swapped for a real ML-based
-highlight/virality model without touching callers.
+  - **hook**: how the window opens. A question, a claim, a number, a
+    contradiction -- the first two seconds decide whether anyone stays, so
+    this carries the most weight.
+  - **payoff**: whether the rest of the window has substance -- the
+    keywords that signal a point being made rather than small talk.
+  - **density**: words per second across the window. Applause, music, and
+    long pauses read as low density; a made point reads as normal speech.
+  - **completeness**: does the window start at the beginning of a thought
+    rather than halfway through one.
+  - **filler penalty**: greetings, thanks, and audience noise are what a
+    talk show is full of and what nobody clips.
+
+`detect_highlights(segments) -> segments` still marks `is_highlight` /
+`highlight_score` in place, so this stays swappable for a real virality
+model without touching callers.
 """
 
 from __future__ import annotations
@@ -26,8 +34,12 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from app.models.transcript_segment import TranscriptSegment
 
-# Words that often signal an engaging, quotable, or emotionally charged
-# moment in spoken content — a crude proxy for "highlight-worthy".
+# Roughly what a generated short covers. Scoring looks this far past each
+# segment, because that is the material a viewer would actually get.
+SHORT_WINDOW_SECONDS = 40.0
+
+# Words that signal a point being made rather than small talk -- a crude
+# proxy for "there is something here worth clipping".
 HIGHLIGHT_KEYWORDS: set[str] = {
     "amazing", "incredible", "secret", "never", "always", "best", "worst",
     "biggest", "huge", "shocking", "surprising", "important", "key",
@@ -35,43 +47,168 @@ HIGHLIGHT_KEYWORDS: set[str] = {
     "truth", "proven", "guarantee", "love", "hate", "why", "how", "what if",
     "imagine", "stop", "listen", "remember", "crazy", "insane",
     "game changer", "no one", "everyone", "nobody tells you",
+    "realized", "learned", "changed my", "the reason", "the problem",
+    "the thing is", "difference", "actually", "honestly", "literally",
 }
 
-# Ideal highlight clip length in seconds — short-form platforms (Shorts,
-# Reels, TikTok) tend to favor roughly 8-60s segments.
-IDEAL_MIN_DURATION = 8.0
-IDEAL_MAX_DURATION = 60.0
+# How a clip that holds attention tends to open. Matched against the first
+# segment of the window only: these earn their weight by being the first
+# thing a scroller hears.
+_HOOK_PATTERNS: tuple[re.Pattern[str], ...] = tuple(
+    re.compile(pattern, re.IGNORECASE)
+    for pattern in (
+        r"\?\s*$",                                   # a question
+        r"^(what|why|how|when|who|which|where)\b",   # ...or one being asked
+        r"\b(here'?s|this is) (the|why|what|how)\b",
+        r"\bthe (truth|secret|reason|problem|thing|trick|point|difference)\b",
+        r"\b(nobody|no one|most people|everyone) (tells|knows|thinks|does)\b",
+        r"\bi (never|always|used to|didn'?t|couldn'?t|realized|learned)\b",
+        r"\b(biggest|worst|best|first|only|hardest|craziest)\b",
+        r"\b(you (should|need to|have to|can)|if you)\b",
+        r"\b\d+([.,]\d+)?\s*(things|ways|reasons|years|minutes|percent|%|x|k|million|dollars)\b",
+        r"\$\s*\d",
+        r"\b(but|actually|honestly|the thing is|turns out)\b",
+    )
+)
+
+# What a room full of people sounds like between the parts worth clipping.
+_FILLER_PATTERNS: tuple[re.Pattern[str], ...] = tuple(
+    re.compile(pattern, re.IGNORECASE)
+    for pattern in (
+        r"\bthank you\b",
+        r"\bthanks (so much|again|for)\b",
+        r"\bwelcome (back|to the show|everyone)\b",
+        r"\b(please welcome|ladies and gentlemen)\b",
+        r"\b(applause|laughter|music|cheering)\b",
+        r"^\s*[\[\(].*[\]\)]\s*$",   # [Applause], (Music)
+        r"\b(hi|hey|hello) (everybody|everyone|guys)\b",
+        r"\b(ladies|gentlemen|folks)\b",
+        r"\bgood (morning|evening|to see you)\b",
+    )
+)
+
+# The words that carry a point, as opposed to the ones that carry a
+# conversation. Deliberately narrower than HIGHLIGHT_KEYWORDS: "why" and
+# "how" appear in every other sentence of an interview, so counting them
+# as payoff makes chit-chat look like insight.
+INSIGHT_KEYWORDS: set[str] = {
+    "realized", "realised", "learned", "mistake", "truth", "reason",
+    "secret", "biggest", "worst", "best", "never", "always", "changed",
+    "difference", "important", "surprising", "shocking", "failed",
+    "advice", "lesson", "problem", "turns out", "the thing is",
+    "what happened", "the first time", "years", "nobody",
+}
+
+# Normal conversational speech, in words per second. Used to normalise the
+# density score: much below this is a pause, applause or music.
+_SPEECH_WORDS_PER_SECOND = 2.6
+
+# A clip has to open with a sentence, not a syllable. "Why?" matches every
+# hook pattern going and makes a terrible opening line, so an opener this
+# short earns no hook credit at all.
+_MIN_HOOK_WORDS = 5
+
+# Openers that are visibly the middle of a thought. Starting a short here
+# means opening on "...but I couldn't figure out how", which reads as a
+# broken clip however good what follows is.
+_CONTINUATION_PATTERN = re.compile(
+    r"^\s*(and|but|so|because|which|that|then|or|also|anyway|though)\b",
+    re.IGNORECASE,
+)
+
+# Uninterrupted narration comes in long segments; banter comes in scraps.
+# Mean segment length, in seconds, that counts as someone telling a story.
+_STORY_SEGMENT_SECONDS = 3.0
+
+# Score weights (sum to 1.0 before penalties are subtracted).
+_HOOK_WEIGHT = 0.30
+_PAYOFF_WEIGHT = 0.25
+_DENSITY_WEIGHT = 0.20
+_STORY_WEIGHT = 0.15
+_COMPLETENESS_WEIGHT = 0.10
+# How much a window full of greetings and applause can lose.
+_MAX_FILLER_PENALTY = 0.45
+# ...and how much opening mid-thought costs.
+_MAX_CONTINUATION_PENALTY = 0.30
 
 # Fraction of segments (by score, descending) flagged as highlights.
 HIGHLIGHT_FRACTION = 0.2
 MIN_HIGHLIGHTS = 1
 
-# Score weights (must sum to 1.0).
-_KEYWORD_WEIGHT = 0.5
-_DURATION_WEIGHT = 0.3
-_COMPLETENESS_WEIGHT = 0.2
+# Kept for callers and tests that reason about clip length bounds.
+IDEAL_MIN_DURATION = 8.0
+IDEAL_MAX_DURATION = 60.0
 
 
-def _keyword_score(text: str) -> float:
+def hook_score(text: str) -> float:
+    """How strongly this line opens a short. 0-1.
+
+    Public because clip titles are chosen the same way: the line that would
+    make the best opening also makes the best title.
+    """
+
+    stripped = text.strip()
+    if len(stripped.split()) < _MIN_HOOK_WORDS:
+        # "Why?" is not a hook, it is half of someone else's sentence.
+        return 0.0
+    hits = sum(1 for pattern in _HOOK_PATTERNS if pattern.search(stripped))
+    # Two independent signals is already a strong opener; more is noise.
+    return min(hits / 2.0, 1.0)
+
+
+def _payoff_score(text: str) -> float:
+    """Whether the window says something, by insight-word density. 0-1."""
+
     lowered = text.lower()
-    hits = sum(1 for kw in HIGHLIGHT_KEYWORDS if kw in lowered)
-    word_count = max(len(lowered.split()), 1)
-    return min(hits / word_count * 10, 1.0)
+    hits = sum(1 for keyword in INSIGHT_KEYWORDS if keyword in lowered)
+    words = max(len(lowered.split()), 1)
+    # ~1 insight word per 25 spoken words is a stretch making a point.
+    return min(hits / words * 25.0, 1.0)
 
 
-def _duration_score(start_time: float, end_time: float) -> float:
-    duration = end_time - start_time
+def _continuation_penalty(text: str) -> float:
+    """Whether this opens mid-thought rather than at the start of one."""
+
+    stripped = text.strip()
+    if not stripped:
+        return 1.0
+    if _CONTINUATION_PATTERN.match(stripped):
+        return 1.0
+    return 0.0 if stripped[0].isupper() else 1.0
+
+
+def _story_score(window: list[TranscriptSegment]) -> float:
+    """Whether one person is telling something, or a room is trading lines.
+
+    Whisper breaks on pauses, so an uninterrupted stretch of narration
+    arrives as long segments and rapid back-and-forth arrives as scraps.
+    """
+
+    if not window:
+        return 0.0
+    lengths = [
+        segment.end_time - segment.start_time
+        for segment in window
+        if segment.end_time > segment.start_time
+    ]
+    if not lengths:
+        return 0.0
+    mean_length = sum(lengths) / len(lengths)
+    return min(mean_length / _STORY_SEGMENT_SECONDS, 1.0)
+
+
+def _density_score(text: str, duration: float) -> float:
+    """Words per second, normalised. Silence and applause score low."""
+
     if duration <= 0:
         return 0.0
-    if IDEAL_MIN_DURATION <= duration <= IDEAL_MAX_DURATION:
-        return 1.0
-    if duration < IDEAL_MIN_DURATION:
-        return duration / IDEAL_MIN_DURATION
-    # Longer than ideal: decay towards 0 the further past the max it runs.
-    return max(0.0, 1.0 - (duration - IDEAL_MAX_DURATION) / IDEAL_MAX_DURATION)
+    words_per_second = len(text.split()) / duration
+    return min(words_per_second / _SPEECH_WORDS_PER_SECOND, 1.0)
 
 
 def _completeness_score(text: str) -> float:
+    """Whether this reads as the start of a thought rather than the middle."""
+
     stripped = text.strip()
     if not stripped:
         return 0.0
@@ -80,16 +217,52 @@ def _completeness_score(text: str) -> float:
     return (0.5 if ends_clean else 0.0) + (0.5 if starts_capitalized else 0.0)
 
 
-def _score_segment(segment: TranscriptSegment) -> float:
-    keyword = _keyword_score(segment.text)
-    duration = _duration_score(segment.start_time, segment.end_time)
-    completeness = _completeness_score(segment.text)
+def _filler_penalty(text: str) -> float:
+    """How much of this window is the noise between the good parts. 0-1."""
+
+    stripped = text.strip()
+    if not stripped:
+        return 1.0
+    hits = sum(1 for pattern in _FILLER_PATTERNS if pattern.search(stripped))
+    words = len(stripped.split())
+    if words < 6:
+        # Barely anything said: an interjection, not a moment.
+        return 1.0
+    return min(hits / 3.0, 1.0)
+
+
+def _window_from(
+    segments: list[TranscriptSegment], index: int
+) -> list[TranscriptSegment]:
+    """The segments the short starting at `index` would cover."""
+
+    limit = segments[index].start_time + SHORT_WINDOW_SECONDS
+    window = []
+    for segment in segments[index:]:
+        if segment.start_time >= limit:
+            break
+        window.append(segment)
+    return window
+
+
+def _score_segment(segments: list[TranscriptSegment], index: int) -> float:
+    """Score the short that would open at `segments[index]`."""
+
+    opening = segments[index]
+    window = _window_from(segments, index)
+    window_text = " ".join(segment.text.strip() for segment in window)
+    window_duration = max(window[-1].end_time - opening.start_time, 0.0)
+
     score = (
-        _KEYWORD_WEIGHT * keyword
-        + _DURATION_WEIGHT * duration
-        + _COMPLETENESS_WEIGHT * completeness
+        _HOOK_WEIGHT * hook_score(opening.text)
+        + _PAYOFF_WEIGHT * _payoff_score(window_text)
+        + _DENSITY_WEIGHT * _density_score(window_text, window_duration)
+        + _STORY_WEIGHT * _story_score(window)
+        + _COMPLETENESS_WEIGHT * _completeness_score(opening.text)
     )
-    return round(score, 4)
+    score -= _MAX_FILLER_PENALTY * _filler_penalty(window_text)
+    score -= _MAX_CONTINUATION_PENALTY * _continuation_penalty(opening.text)
+    return round(max(score, 0.0), 4)
 
 
 def calculate_target_shorts_count(total_duration_seconds: float) -> int:
@@ -137,8 +310,8 @@ def detect_highlights(segments: list[TranscriptSegment]) -> list[TranscriptSegme
     if not segments:
         return segments
 
-    for segment in segments:
-        segment.highlight_score = _score_segment(segment)
+    for index, segment in enumerate(segments):
+        segment.highlight_score = _score_segment(segments, index)
         segment.is_highlight = False
 
     min_time = min(s.start_time for s in segments)

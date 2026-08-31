@@ -8,16 +8,38 @@ ownership checks rather than duplicating the query.
 
 from __future__ import annotations
 
+import re
+
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from app.exceptions import NotFoundError, ValidationAppError
 from app.models.clip import Clip, ClipStatus
 from app.models.transcript_segment import TranscriptSegment
-from app.models.video_project import VideoProject, VideoProjectStatus
+from app.models.video_project import (
+    ClipLength,
+    VideoProject,
+    VideoProjectStatus,
+)
 from app.schemas.clip import ClipUpdateRequest
+from app.services.highlight_detection import hook_score
 
-_MAX_AUTO_TITLE_LEN = 40
+_MAX_AUTO_TITLE_LEN = 60
+
+# How far a clip edge may move to land between sentences instead of
+# mid-word. Wide enough to reach the next pause in normal speech, narrow
+# enough that the clip stays the length that was asked for.
+_SNAP_TOLERANCE_SECONDS = 2.5
+# Below this a snapped window is no longer a short; keep the unsnapped one.
+_MIN_SNAPPED_DURATION = 8.0
+# A line shorter than this is a fragment, not a title; longer than the
+# maximum and it is a paragraph.
+_MIN_TITLE_WORDS = 5
+_MAX_TITLE_WORDS = 22
+# A title that opens mid-thought reads as a broken clip.
+_CONTINUATION_START = re.compile(
+    r"^\s*(and|but|so|because|which|that|then|or|of|to|in)\b", re.IGNORECASE
+)
 
 # A single highlighted TranscriptSegment is often just one Whisper sentence
 # (a few seconds), which makes a poor Short on its own. Generated clips are
@@ -26,14 +48,133 @@ MIN_CLIP_DURATION = 30.0
 MAX_CLIP_DURATION = 50.0
 TARGET_CLIP_DURATION = 40.0
 
+#: What each `ClipLength` asks for, as `(target, maximum)` seconds. The
+#: submitter picks one per video: a punchy hook and a full explanation want
+#: different cuts of the same footage, and that decision has to be made
+#: while the clips are being cut, not trimmed back afterwards.
+CLIP_LENGTH_TARGETS: dict[ClipLength, tuple[float, float]] = {
+    ClipLength.auto: (TARGET_CLIP_DURATION, MAX_CLIP_DURATION),
+    ClipLength.fast: (22.0, 30.0),
+    ClipLength.in_depth: (52.0, 60.0),
+}
+
 
 def _auto_title(text: str) -> str:
-    """Derive a clip title from the first ~40 chars of a transcript segment."""
+    """Derive a clip title from a transcript line.
 
-    stripped = text.strip()
+    Cut at a word boundary rather than mid-word: the title is what the
+    user scans the library by, and "Here's the thing nobody te..." reads
+    like a bug where "Here's the thing nobody..." reads like a title.
+    """
+
+    stripped = " ".join(text.split())
+    if not stripped:
+        return "Untitled clip"
     if len(stripped) <= _MAX_AUTO_TITLE_LEN:
-        return stripped or "Untitled clip"
-    return stripped[:_MAX_AUTO_TITLE_LEN].rstrip() + "..."
+        return stripped
+
+    cut = stripped[:_MAX_AUTO_TITLE_LEN]
+    if " " in cut:
+        cut = cut[: cut.rindex(" ")]
+    return cut.rstrip(" ,;:-") + "..."
+
+
+def _sentences_in(
+    segments: list[TranscriptSegment], start: float, end: float
+) -> list[str]:
+    """Rebuild whole sentences from the segments inside a window.
+
+    Whisper breaks on pauses, not on grammar, so a segment is usually half
+    a sentence ("of the biggest boy band in the world, a 24-year-old") --
+    fine for captions, useless as a title. Joining until terminal
+    punctuation gives back something a person actually said end to end.
+    """
+
+    sentences: list[str] = []
+    current: list[str] = []
+    for segment in segments:
+        if segment.start_time < start or segment.end_time > end:
+            continue
+        text = segment.text.strip()
+        if not text:
+            continue
+        current.append(text)
+        if text.endswith((".", "!", "?")):
+            sentences.append(" ".join(current))
+            current = []
+    if current:
+        sentences.append(" ".join(current))
+    return sentences
+
+
+def _title_from_window(
+    segments: list[TranscriptSegment], start: float, end: float, fallback: str
+) -> str:
+    """Title a clip from the best sentence inside it, not the first line.
+
+    A clip opens where the story starts, which is often a setup line
+    ("Oh, this is the guy?"). The sentence worth putting in the library is
+    the one that would make someone stop scrolling -- so titles are picked
+    by the same measure that picks hooks, over every sentence in the clip.
+    """
+
+    candidates = [
+        sentence
+        for sentence in _sentences_in(segments, start, end)
+        if _MIN_TITLE_WORDS <= len(sentence.split()) <= _MAX_TITLE_WORDS
+        and not _CONTINUATION_START.match(sentence)
+    ]
+    if not candidates:
+        return _auto_title(fallback)
+
+    def strength(sentence: str) -> tuple[float, int]:
+        words = len(sentence.split())
+        # Sayable length: a title is a line, not a paragraph.
+        length_fit = 1.0 if words <= 16 else 0.5
+        return hook_score(sentence) * length_fit, -abs(words - 10)
+
+    return _auto_title(max(candidates, key=strength))
+
+
+def _snap_to_speech(
+    start: float,
+    end: float,
+    segments: list[TranscriptSegment],
+    floor: float,
+    ceiling: float,
+) -> tuple[float, float]:
+    """Move a clip's edges onto the nearest boundaries between sentences.
+
+    A window sized purely by duration lands mid-word about as often as not,
+    and a short that opens halfway through "...and that's why I" is dead on
+    arrival however well it is framed. Whisper segments break on natural
+    pauses, so their edges are the closest thing to sentence boundaries the
+    transcript has.
+
+    Edges only move within `_SNAP_TOLERANCE_SECONDS`, so this tidies a cut
+    rather than redefining it, and never past the neighbours' territory.
+    """
+
+    starts = [
+        segment.start_time
+        for segment in segments
+        if abs(segment.start_time - start) <= _SNAP_TOLERANCE_SECONDS
+        and floor <= segment.start_time
+    ]
+    ends = [
+        segment.end_time
+        for segment in segments
+        if abs(segment.end_time - end) <= _SNAP_TOLERANCE_SECONDS
+        and segment.end_time <= ceiling
+    ]
+
+    snapped_start = min(starts, key=lambda value: abs(value - start), default=start)
+    snapped_end = max(ends, key=lambda value: -abs(value - end), default=end)
+    if snapped_end - snapped_start < _MIN_SNAPPED_DURATION:
+        # Snapping collapsed the clip (a long segment straddling both
+        # edges); the duration-based window was the better answer.
+        return start, end
+    return snapped_start, snapped_end
 
 
 def _cluster_raw_segments(
@@ -62,11 +203,18 @@ def _cluster_raw_segments(
 
 
 def _pad_clusters(
-    clusters: list[list], floor: float, ceiling: float
+    clusters: list[list],
+    floor: float,
+    ceiling: float,
+    target: float = TARGET_CLIP_DURATION,
+    maximum: float = MAX_CLIP_DURATION,
 ) -> list[tuple[float, float, TranscriptSegment]]:
-    """Expand each cluster toward TARGET_CLIP_DURATION (or trim it down to
-    MAX_CLIP_DURATION if it's already longer), padding only into the gap
-    before the previous cluster / after the next one.
+    """Expand each cluster toward `target` (or trim it down to `maximum` if
+    it's already longer), padding only into the gap before the previous
+    cluster / after the next one.
+
+    `target`/`maximum` come from the video's requested short length, so
+    "Fast" and "In-Depth" cut differently from the same highlights.
 
     Processing left-to-right and bounding this cluster's "pad before" by how
     much room is left after the *previous* cluster's already-finalized end
@@ -81,12 +229,12 @@ def _pad_clusters(
     for idx, (start, end, anchor) in enumerate(clusters):
         next_raw_start = clusters[idx + 1][0] if idx < n - 1 else ceiling
 
-        if end - start > MAX_CLIP_DURATION:
+        if end - start > maximum:
             center = (start + end) / 2
-            start = center - MAX_CLIP_DURATION / 2
-            end = start + MAX_CLIP_DURATION
-        elif end - start < TARGET_CLIP_DURATION:
-            pad = TARGET_CLIP_DURATION - (end - start)
+            start = center - maximum / 2
+            end = start + maximum
+        elif end - start < target:
+            pad = target - (end - start)
             max_before = max(0.0, start - prev_final_end)
             max_after = max(0.0, next_raw_start - end)
 
@@ -118,8 +266,8 @@ def create_clips_from_highlights(
     """Create draft Clips from a video project's highlighted transcript segments.
 
     Adjacent/overlapping highlights are first grouped into clusters, then
-    each cluster is expanded (or trimmed) into a MIN_CLIP_DURATION -
-    MAX_CLIP_DURATION second window -- a raw Whisper segment is often just
+    each cluster is expanded (or trimmed) into a window of the length the
+    video was submitted with (see CLIP_LENGTH_TARGETS) -- a raw Whisper segment is often just
     one short sentence, too brief to stand alone as a Short -- without ever
     growing into a neighboring cluster's own territory, so a video with many
     scattered highlights still produces several short clips rather than one
@@ -163,19 +311,41 @@ def create_clips_from_highlights(
         or 0.0
     )
 
+    # Every segment, not just the highlighted ones: the edges a clip snaps
+    # to are pauses in speech, and most of those sit in ordinary lines.
+    all_segments = (
+        db.query(TranscriptSegment)
+        .filter(TranscriptSegment.video_project_id == video_project_id)
+        .order_by(TranscriptSegment.start_time.asc())
+        .all()
+    )
+
+    target, maximum = CLIP_LENGTH_TARGETS[project.target_clip_length]
     clusters = _cluster_raw_segments(highlight_segments)
-    windows = _pad_clusters(clusters, 0.0, ceiling)
+    windows = _pad_clusters(clusters, 0.0, ceiling, target, maximum)
 
     clips: list[Clip] = []
+    previous_end = 0.0
     for index, (start_time, end_time, anchor_segment) in enumerate(windows):
+        next_start = windows[index + 1][0] if index + 1 < len(windows) else ceiling
+        start_time, end_time = _snap_to_speech(
+            start_time, end_time, all_segments, previous_end, next_start
+        )
+        previous_end = end_time
         clip = Clip(
             video_project_id=video_project_id,
             user_id=user_id,
-            title=_auto_title(anchor_segment.text),
-            start_time=start_time,
-            end_time=end_time,
+            title=_title_from_window(
+                all_segments, start_time, end_time, anchor_segment.text
+            ),
+            start_time=round(start_time, 2),
+            end_time=round(end_time, 2),
             order_index=index,
             status=ClipStatus.draft,
+            # Born with what the submitter asked for, so the first export
+            # already looks the way they set it up.
+            framing_mode=project.framing_mode,
+            caption_style=project.caption_style,
         )
         db.add(clip)
         clips.append(clip)

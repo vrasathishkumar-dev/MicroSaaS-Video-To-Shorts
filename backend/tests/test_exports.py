@@ -8,14 +8,15 @@ download gating) without depending on a real ffmpeg binary.
 from __future__ import annotations
 
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
 import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy.orm import Session
 
 from app.auth.jwt import create_access_token
-from app.models.clip import Clip, ClipStatus
+from app.models.clip import Clip, ClipCaptionStyle, ClipStatus
+from app.models.transcript_segment import TranscriptSegment
 from app.models.user import User
 from app.models.video_project import SourceType, VideoProject, VideoProjectStatus
 
@@ -302,6 +303,196 @@ class TestPreview:
         assert response.status_code == 404
 
 
+class TestAutoBrollToggle:
+    """The submit form's B-roll switch. Auto-sourcing runs at export, so
+    the switch has to be honoured there or it does nothing at all."""
+
+    def _clip_with_broll_setting(
+        self, db_session: Session, user: User, *, auto_broll: bool
+    ) -> Clip:
+        project = VideoProject(
+            user_id=user.id,
+            title="B-roll project",
+            source_type=SourceType.upload,
+            status=VideoProjectStatus.ready,
+            auto_broll=auto_broll,
+        )
+        db_session.add(project)
+        db_session.commit()
+        db_session.refresh(project)
+
+        clip = Clip(
+            video_project_id=project.id,
+            user_id=user.id,
+            title="Clip",
+            start_time=0.0,
+            end_time=10.0,
+            order_index=0,
+            status=ClipStatus.draft,
+        )
+        db_session.add(clip)
+        db_session.commit()
+        db_session.refresh(clip)
+        return clip
+
+    def _export(self, client: TestClient, headers: dict[str, str], clip: Clip):  # type: ignore[no-untyped-def]
+        with (
+            patch("app.routers.exports.render_clip", new=_fake_render_success),
+            patch("app.config.settings.BROLL_AUTO_ON_EXPORT", True),
+            patch("app.config.settings.PEXELS_API_KEY", "test-key"),
+            patch(
+                "app.routers.exports.auto_source_broll",
+                new=AsyncMock(return_value=[]),
+            ) as sourcing,
+        ):
+            response = client.post(
+                f"/api/v1/clips/{clip.id}/export", headers=headers
+            )
+        assert response.status_code == 200
+        return sourcing
+
+    def test_b_roll_is_sourced_when_the_video_asked_for_it(
+        self,
+        client: TestClient,
+        auth_headers: dict[str, str],
+        db_session: Session,
+        test_user: User,
+    ) -> None:
+        clip = self._clip_with_broll_setting(db_session, test_user, auto_broll=True)
+
+        sourcing = self._export(client, auth_headers, clip)
+
+        sourcing.assert_awaited_once()
+
+    def test_b_roll_is_skipped_when_the_video_switched_it_off(
+        self,
+        client: TestClient,
+        auth_headers: dict[str, str],
+        db_session: Session,
+        test_user: User,
+    ) -> None:
+        clip = self._clip_with_broll_setting(db_session, test_user, auto_broll=False)
+
+        sourcing = self._export(client, auth_headers, clip)
+
+        sourcing.assert_not_awaited()
+
+
+class TestCaptionTimeline:
+    """/clips/{id}/captions: what the editor previews. It has to be the
+    render path's own timeline, or the studio shows a silent short that
+    exports fully subtitled."""
+
+    def _clip_with_transcript(self, db_session: Session, user: User) -> Clip:
+        project = VideoProject(
+            user_id=user.id,
+            title="Caption project",
+            source_type=SourceType.upload,
+            status=VideoProjectStatus.ready,
+        )
+        db_session.add(project)
+        db_session.commit()
+        db_session.refresh(project)
+
+        db_session.add(
+            TranscriptSegment(
+                video_project_id=project.id,
+                start_time=5.0,
+                end_time=9.0,
+                text="Nobody tells you how simple this really is",
+                is_highlight=True,
+            )
+        )
+        clip = Clip(
+            video_project_id=project.id,
+            user_id=user.id,
+            title="Caption clip",
+            start_time=5.0,
+            end_time=15.0,
+            order_index=0,
+            status=ClipStatus.draft,
+            caption_style=ClipCaptionStyle.hormozi,
+        )
+        db_session.add(clip)
+        db_session.commit()
+        db_session.refresh(clip)
+        return clip
+
+    def test_captions_come_from_the_transcript_not_just_caption_text(
+        self,
+        client: TestClient,
+        auth_headers: dict[str, str],
+        db_session: Session,
+        test_user: User,
+    ) -> None:
+        clip = self._clip_with_transcript(db_session, test_user)
+        assert clip.caption_text is None, "the point: nothing typed by hand"
+
+        response = client.get(
+            f"/api/v1/clips/{clip.id}/captions", headers=auth_headers
+        )
+
+        assert response.status_code == 200
+        body = response.json()
+        assert body["style"] == "hormozi"
+        assert body["events"], "a clip with a transcript has captions to show"
+        # Timed from the clip's own start, so the editor can match them
+        # against its playhead.
+        assert body["events"][0]["start_time"] == 0.0
+        assert all(event["end_time"] <= 10.0 for event in body["events"])
+        assert "nobody" in " ".join(e["text"] for e in body["events"]).lower()
+
+    def test_a_word_highlighting_style_lights_one_word_at_a_time(
+        self,
+        client: TestClient,
+        auth_headers: dict[str, str],
+        db_session: Session,
+        test_user: User,
+    ) -> None:
+        clip = self._clip_with_transcript(db_session, test_user)
+
+        response = client.get(
+            f"/api/v1/clips/{clip.id}/captions", headers=auth_headers
+        )
+
+        events = response.json()["events"]
+        highlighted = [e["active_word"] for e in events if e["active_word"] is not None]
+        assert highlighted, "Hormozi highlights the spoken word; none were marked"
+        assert highlighted == sorted(highlighted) or len(set(highlighted)) > 1
+
+    def test_a_style_without_highlighting_returns_whole_captions(
+        self,
+        client: TestClient,
+        auth_headers: dict[str, str],
+        db_session: Session,
+        test_user: User,
+    ) -> None:
+        clip = self._clip_with_transcript(db_session, test_user)
+        clip.caption_style = ClipCaptionStyle.minimal
+        db_session.commit()
+
+        response = client.get(
+            f"/api/v1/clips/{clip.id}/captions", headers=auth_headers
+        )
+
+        events = response.json()["events"]
+        assert events
+        assert all(event["active_word"] is None for event in events)
+
+    def test_other_users_clip_404(
+        self,
+        client: TestClient,
+        auth_headers: dict[str, str],
+        db_session: Session,
+        other_user: User,
+    ) -> None:
+        clip = _make_clip(db_session, other_user)
+
+        response = client.get(f"/api/v1/clips/{clip.id}/captions", headers=auth_headers)
+
+        assert response.status_code == 404
+
+
 class TestFraming:
     """/clips/{id}/framing: the crop windows the Speaker Focus preview
     applies, so the editor shows what the export will render.
@@ -359,7 +550,7 @@ class TestFraming:
             crop_height=683,
             windows=(
                 SpeakerWindow(start_time=0.0, x=960, y=270),
-                SpeakerWindow(start_time=12.5, x=192, y=200),
+                SpeakerWindow(start_time=12.5, x=192, y=200, at_cut=False),
             ),
         )
 
@@ -379,8 +570,12 @@ class TestFraming:
             "y": 0.25,
             "width": 0.2,
             "height": pytest.approx(683 / 1080),
+            "at_cut": True,
         }
         assert body["windows"][1]["start_time"] == 12.5
+        assert body["windows"][1]["at_cut"] is False, (
+            "a mid-shot move must tell the preview to ease, not snap"
+        )
         # Analysed over the clip's own window, not the whole source.
         assert compute.call_args.args[1:3] == (5.0, 40.0)
 
@@ -460,8 +655,22 @@ class TestFraming:
         assert (section["start_time"], section["end_time"]) == (0.0, 12.0)
         # Panes carry the split's own crop size, not the single window's.
         assert section["panes"] == [
-            {"start_time": 0.0, "x": 0.0, "y": 0.0, "width": 0.5, "height": 0.5},
-            {"start_time": 0.0, "x": 0.5, "y": 0.5, "width": 0.5, "height": 0.5},
+            {
+                "start_time": 0.0,
+                "x": 0.0,
+                "y": 0.0,
+                "width": 0.5,
+                "height": 0.5,
+                "at_cut": True,
+            },
+            {
+                "start_time": 0.0,
+                "x": 0.5,
+                "y": 0.5,
+                "width": 0.5,
+                "height": 0.5,
+                "at_cut": True,
+            },
         ]
 
     def test_an_exported_clip_is_already_framed(

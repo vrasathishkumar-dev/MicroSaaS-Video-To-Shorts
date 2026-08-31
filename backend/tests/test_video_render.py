@@ -21,7 +21,7 @@ import pytest
 from sqlalchemy.orm import Session
 
 from app.models.broll_asset import BrollAsset, BrollSource
-from app.models.clip import Clip, ClipStatus
+from app.models.clip import Clip, ClipCaptionStyle, ClipFraming, ClipStatus
 from app.models.transcript_segment import TranscriptSegment
 from app.models.user import User
 from app.models.video_project import SourceType, VideoProject, VideoProjectStatus
@@ -146,12 +146,13 @@ def _mean_top_strip_rgb(path: Path) -> tuple[int, int, int]:
     return (pixel[0], pixel[1], pixel[2])
 
 
-def _brightest_pixel_in_caption_band(path: Path) -> int:
-    """Brightest pixel in the lower third of the first frame.
+def _caption_band_pixels(path: Path, pix_fmt: str = "gray") -> bytes:
+    """Raw pixels of the caption band (lower third) of a mid-clip frame.
 
-    A burned-in caption is white on black; over the dark synthetic source
-    used here, its presence or absence is the difference between a bright
-    pixel and none at all.
+    Sampled at full resolution: a caption is glyphs, not a wash, and
+    several of the styles sit on a dark panel -- downscaling the band first
+    would average the text away and report "no caption" for a caption that
+    is plainly there.
     """
 
     result = subprocess.run(
@@ -164,19 +165,47 @@ def _brightest_pixel_in_caption_band(path: Path) -> int:
             "-i",
             str(path),
             "-vf",
-            "crop=1080:640:0:1100,scale=64:64",
+            "crop=1080:640:0:1100",
             "-frames:v",
             "1",
             "-f",
             "rawvideo",
             "-pix_fmt",
-            "gray",
+            pix_fmt,
             "-",
         ],
         check=True,
         capture_output=True,
     )
-    return max(result.stdout) if result.stdout else 0
+    return result.stdout
+
+
+def _brightest_pixel_in_caption_band(path: Path) -> int:
+    """Brightest pixel in the lower third of a mid-clip frame.
+
+    Over the dark synthetic source used here, a burned-in caption's
+    presence or absence is the difference between a bright pixel and none
+    at all.
+    """
+
+    pixels = _caption_band_pixels(path)
+    return max(pixels) if pixels else 0
+
+
+def _yellowest_caption_pixel(path: Path) -> int:
+    """How yellow the caption band gets: the largest red-minus-blue margin.
+
+    Yellow text scores high, white text scores ~0, and the blue synthetic
+    source scores negative -- so this separates the caption presets by the
+    only thing that distinguishes them on screen: colour.
+    """
+
+    pixels = _caption_band_pixels(path, pix_fmt="rgb24")
+    if not pixels:
+        return 0
+    return max(
+        pixels[index] - pixels[index + 2] for index in range(0, len(pixels) - 2, 3)
+    )
 
 
 class _QuietStaticHandler(http.server.SimpleHTTPRequestHandler):
@@ -544,6 +573,18 @@ class TestSplitScreenFraming:
         assert r"overlay=enable=between(t\,0.00\,8.00)" in graph
         assert "crop=608:1080" in graph, "the single-speaker frame is still there"
 
+    def test_the_panes_dissolve_out_rather_than_popping(self) -> None:
+        graph = self._graph(with_split=True)
+
+        # The stretch runs 0-8s of a 20s clip: no fade in (the clip opens
+        # already in the layout), and a dissolve back out where it hands
+        # the frame to a single speaker.
+        assert (
+            r"fade=alpha=1:duration=0.25:enable=between(t\,7.75\,8.00)"
+            ":start_time=7.75:type=out" in graph
+        )
+        assert "type=in" not in graph
+
     def test_a_clip_with_one_speaker_is_not_stacked(self) -> None:
         graph = self._graph(with_split=False)
 
@@ -585,6 +626,7 @@ class TestFraming:
             end_time=2.0,
             order_index=0,
             status=ClipStatus.rendering,
+            framing_mode=ClipFraming.dynamic_blur,
         )
         db_session.add(clip)
         db_session.commit()
@@ -727,3 +769,106 @@ class TestBurnedInCaptions:
         db_session.refresh(clip)
         assert clip.status == ClipStatus.ready
         assert _brightest_pixel_in_caption_band(Path(clip.video_file_path)) > 180
+
+
+class TestEditorChoicesReachTheExport:
+    """The framing toggle and caption picker are render settings, not
+    preview decoration: whatever the studio is showing is what the file
+    has to come out as."""
+
+    def _clip(
+        self, db_session: Session, test_user: User, name: str, **overrides
+    ) -> Clip:
+        import app.services.storage as storage_module
+
+        source_file = storage_module.UPLOAD_ROOT / "videos" / f"{name}.mp4"
+        _make_wide_source_video(source_file)
+
+        project = VideoProject(
+            user_id=test_user.id,
+            title=f"{name} project",
+            source_type=SourceType.upload,
+            status=VideoProjectStatus.ready,
+            source_file_path=f"videos/{name}.mp4",
+        )
+        db_session.add(project)
+        db_session.commit()
+        db_session.refresh(project)
+
+        defaults = dict(
+            video_project_id=project.id,
+            user_id=test_user.id,
+            title=f"{name} clip",
+            start_time=0.0,
+            end_time=2.0,
+            order_index=0,
+            status=ClipStatus.rendering,
+        )
+        defaults.update(overrides)
+        clip = Clip(**defaults)
+        db_session.add(clip)
+        db_session.commit()
+        db_session.refresh(clip)
+        return clip
+
+    def test_choosing_fit_letterboxes_instead_of_filling(
+        self, db_session: Session, test_user: User
+    ) -> None:
+        """`fit` is the one mode that is supposed to leave black bars --
+        if the export ignored the choice, the default speaker crop or the
+        blurred fill would put picture up there instead."""
+
+        clip = self._clip(
+            db_session, test_user, "fit_source", framing_mode=ClipFraming.fit
+        )
+
+        render_clip(clip.id)
+
+        db_session.refresh(clip)
+        assert clip.status == ClipStatus.ready
+        red, green, blue = _mean_top_strip_rgb(Path(clip.video_file_path))
+        assert max(red, green, blue) < 12, (
+            "the top of the frame has picture in it -- the clip was set to "
+            "'fit', which letterboxes"
+        )
+
+    def test_choosing_a_caption_style_changes_the_pixels(
+        self, db_session: Session, test_user: User
+    ) -> None:
+        """Hormozi is yellow on a dark panel; Clean Minimal is white text
+        straight on the footage. Rendering both and finding the same pixels
+        would mean the picker never reached the renderer."""
+
+        if video_render_module._caption_backend() != "image":
+            pytest.skip("caption styling needs the Pillow rasteriser")
+
+        hormozi = self._clip(
+            db_session,
+            test_user,
+            "hormozi_source",
+            caption_text="Nobody tells you this",
+            caption_style=ClipCaptionStyle.hormozi,
+        )
+        minimal = self._clip(
+            db_session,
+            test_user,
+            "minimal_source",
+            caption_text="Nobody tells you this",
+            caption_style=ClipCaptionStyle.minimal,
+        )
+
+        render_clip(hormozi.id)
+        render_clip(minimal.id)
+        db_session.refresh(hormozi)
+        db_session.refresh(minimal)
+        assert hormozi.status == ClipStatus.ready
+        assert minimal.status == ClipStatus.ready
+
+        yellow = _yellowest_caption_pixel(Path(hormozi.video_file_path))
+        assert yellow > 60, (
+            f"no yellow in the caption band (best red-over-blue margin {yellow}) "
+            "-- the Hormozi preset did not reach the render"
+        )
+        assert _yellowest_caption_pixel(Path(minimal.video_file_path)) < yellow, (
+            "the minimal preset rendered the same colours as Hormozi"
+        )

@@ -13,7 +13,14 @@ import {
 import { GradientButton } from '@/components/ui/GradientButton';
 import { cn } from '@/lib/utils';
 import { submitVideo } from '@/services/videoService';
-import type { ApiError, VideoProject, VideoSourceType } from '@/types';
+import type {
+  ApiError,
+  CaptionStylePreset,
+  ClipLength,
+  FramingMode,
+  VideoProject,
+  VideoSourceType,
+} from '@/types';
 
 export interface VideoSubmitFormProps {
   onSuccess: (video: VideoProject) => void;
@@ -38,8 +45,10 @@ export function VideoSubmitForm({ onSuccess }: VideoSubmitFormProps) {
   const [error, setError] = useState<string | null>(null);
   const [isDragging, setIsDragging] = useState(false);
   const [showAiSettings, setShowAiSettings] = useState(false);
-  const [clipLength, setClipLength] = useState<'auto' | 'short' | 'medium'>('auto');
-  const [subtitleStyle, setSubtitleStyle] = useState('hormozi');
+  const [clipLength, setClipLength] = useState<ClipLength>('auto');
+  const [subtitleStyle, setSubtitleStyle] = useState<CaptionStylePreset>('hormozi');
+  const [framingMode, setFramingMode] = useState<FramingMode>('speaker_focus');
+  const [autoBroll, setAutoBroll] = useState(true);
 
   const fileInputRef = useRef<HTMLInputElement>(null);
 
@@ -85,6 +94,10 @@ export function VideoSubmitForm({ onSuccess }: VideoSubmitFormProps) {
           sourceType: mode,
           file: mode === 'upload' ? (file ?? undefined) : undefined,
           sourceUrl: mode === 'url' ? sourceUrl.trim() : undefined,
+          targetClipLength: clipLength,
+          framingMode,
+          captionStyle: subtitleStyle,
+          autoBroll,
         },
         (progressEvent: AxiosProgressEvent) => {
           if (progressEvent.total) {
@@ -276,13 +289,13 @@ export function VideoSubmitForm({ onSuccess }: VideoSubmitFormProps) {
               <div className="grid grid-cols-3 gap-2">
                 {[
                   { id: 'auto', label: 'Auto (30-50s)' },
-                  { id: 'short', label: 'Fast (15-30s)' },
-                  { id: 'medium', label: 'In-Depth (45-60s)' },
+                  { id: 'fast', label: 'Fast (15-30s)' },
+                  { id: 'in_depth', label: 'In-Depth (45-60s)' },
                 ].map((opt) => (
                   <button
                     key={opt.id}
                     type="button"
-                    onClick={() => setClipLength(opt.id as any)}
+                    onClick={() => setClipLength(opt.id as ClipLength)}
                     className={cn(
                       'rounded-lg border px-2.5 py-1.5 text-xs font-medium transition-all',
                       clipLength === opt.id
@@ -310,7 +323,7 @@ export function VideoSubmitForm({ onSuccess }: VideoSubmitFormProps) {
                   <button
                     key={style.id}
                     type="button"
-                    onClick={() => setSubtitleStyle(style.id)}
+                    onClick={() => setSubtitleStyle(style.id as CaptionStylePreset)}
                     className={cn(
                       'rounded-lg border px-2.5 py-2 text-left text-xs font-medium transition-all',
                       subtitleStyle === style.id
@@ -323,6 +336,67 @@ export function VideoSubmitForm({ onSuccess }: VideoSubmitFormProps) {
                 ))}
               </div>
             </div>
+
+            <div className="space-y-1.5">
+              <label className="text-xs font-medium text-muted-foreground">
+                Vertical Framing
+              </label>
+              <div className="grid grid-cols-3 gap-2">
+                {[
+                  { id: 'speaker_focus', label: 'Speaker Focus' },
+                  { id: 'dynamic_blur', label: 'Dynamic Blur' },
+                  { id: 'fit', label: 'Fit (Letterbox)' },
+                ].map((opt) => (
+                  <button
+                    key={opt.id}
+                    type="button"
+                    onClick={() => setFramingMode(opt.id as FramingMode)}
+                    className={cn(
+                      'rounded-lg border px-2.5 py-1.5 text-xs font-medium transition-all',
+                      framingMode === opt.id
+                        ? 'border-primary bg-primary/15 text-primary'
+                        : 'border-glass-border bg-background/50 text-muted-foreground hover:text-foreground',
+                    )}
+                  >
+                    {opt.label}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            <button
+              type="button"
+              onClick={() => setAutoBroll((on) => !on)}
+              aria-pressed={autoBroll}
+              className={cn(
+                'flex w-full items-center justify-between rounded-lg border px-3 py-2.5 text-left transition-all',
+                autoBroll
+                  ? 'border-primary bg-primary/15'
+                  : 'border-glass-border bg-background/50',
+              )}
+            >
+              <span className="space-y-0.5">
+                <span className="block text-xs font-medium text-foreground">
+                  Auto B-Roll
+                </span>
+                <span className="block text-[11px] text-muted-foreground">
+                  Adds matching Pexels &amp; Pixabay footage to each short
+                </span>
+              </span>
+              <span
+                className={cn(
+                  'ml-3 flex h-5 w-9 shrink-0 items-center rounded-full px-0.5 transition-colors',
+                  autoBroll ? 'bg-primary' : 'bg-muted',
+                )}
+              >
+                <span
+                  className={cn(
+                    'h-4 w-4 rounded-full bg-white transition-transform',
+                    autoBroll ? 'translate-x-4' : 'translate-x-0',
+                  )}
+                />
+              </span>
+            </button>
           </div>
         )}
       </div>

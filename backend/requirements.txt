@@ -46,6 +46,10 @@ ffmpeg-python>=0.2.0
 # Video downloader for URL sources (YouTube, Vimeo, TikTok, etc.)
 yt-dlp>=2024.0.0
 
+# Local speech-to-text, so the app transcribes for real without an API key
+# (see app.services.transcription). Downloads its model on first use.
+faster-whisper>=1.1.0
+
 # Caption rasterisation: burns subtitles in as PNG overlays, so captions
 # don't depend on the local ffmpeg having been built with libass/libfreetype
 # (see app.services.caption_render)

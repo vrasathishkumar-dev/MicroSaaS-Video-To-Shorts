@@ -89,7 +89,7 @@ from sqlalchemy.orm import Session, joinedload
 from app.config import settings
 from app.database import SessionLocal
 from app.models.broll_asset import BrollAsset
-from app.models.clip import Clip, ClipStatus
+from app.models.clip import Clip, ClipCaptionStyle, ClipFraming, ClipStatus
 from app.models.transcript_segment import TranscriptSegment
 from app.models.video_project import VideoProject
 from app.services.caption_render import render_caption_images
@@ -101,6 +101,15 @@ from app.services.reframe import (
 from app.services.storage import UPLOAD_ROOT, get_file_path
 
 logger = logging.getLogger(__name__)
+
+# How long the split screen takes to dissolve in over the single-speaker
+# frame, and back out again at the end of a stretch. Kept short: this is a
+# soft landing on a layout change, not a transition effect.
+_SPLIT_FADE_SECONDS = 0.25
+
+# How long a caption image is held past its window, to cover the frame
+# where the next one is still arriving. See _apply_captions.
+_CAPTION_HANDOVER_SECONDS = 0.12
 
 # backend/app/services/video_render.py -> backend/
 _BACKEND_DIR = Path(__file__).resolve().parent.parent.parent
@@ -259,6 +268,8 @@ def _render_and_persist(session: Session, clip: Clip) -> None:
                 broll_assets=list(clip.broll_assets),
                 output_path=output_path,
                 tmp_dir=Path(tmp_dir),
+                framing=_framing_mode(clip),
+                caption_style=clip.caption_style,
             )
     except FileNotFoundError:
         logger.error(
@@ -549,9 +560,18 @@ def _write_ass_file(
 
 
 def _apply_captions(
-    video_stream: Any, events: list[tuple[float, float, str]], tmp_dir: Path
+    video_stream: Any,
+    events: list[tuple[float, float, str]],
+    tmp_dir: Path,
+    caption_style: ClipCaptionStyle | None = None,
 ) -> Any:
-    """Burn `events` into `video_stream` using whichever backend ffmpeg has."""
+    """Burn `events` into `video_stream` using whichever backend ffmpeg has.
+
+    `caption_style` is the preset the clip was set to in the editor. It
+    only reaches the rasteriser: the `ass`/`drawtext` fallbacks exist for
+    ffmpeg builds that can't do better than plain text, and giving them
+    half a look would be worse than giving them the plain one.
+    """
 
     if not events:
         return video_stream
@@ -567,11 +587,21 @@ def _apply_captions(
             settings.RENDER_WIDTH,
             settings.RENDER_HEIGHT,
             _caption_font_file(),
+            caption_style.value if caption_style else None,
         )
         if images is not None:
             for image in images:
+                # Each overlay is held a fraction past its window. Back to
+                # back captions -- a style that lights up one word at a
+                # time makes many -- otherwise flicker for a frame at every
+                # handover, where the outgoing image has ended and the
+                # incoming one's first frame has yet to arrive. Later
+                # overlays sit on top, so the overlap is invisible.
+                hold_until = image.end + _CAPTION_HANDOVER_SECONDS
                 overlay_input = ffmpeg.input(
-                    str(image.path), loop=1, t=max(image.end - image.start, 0.05)
+                    str(image.path),
+                    loop=1,
+                    t=max(hold_until - image.start, 0.05),
                 )
                 video_stream = ffmpeg.overlay(
                     video_stream,
@@ -581,7 +611,7 @@ def _apply_captions(
                     x=0,
                     y=image.y,
                     eof_action="pass",
-                    enable=f"between(t,{image.start:.3f},{image.end:.3f})",
+                    enable=f"between(t,{image.start:.3f},{hold_until:.3f})",
                 )
             return video_stream
         # Rasterising failed at render time (a font that loaded at probe
@@ -637,12 +667,18 @@ def _frame_9x16(
     source_path: str,
     start_time: float,
     duration: float,
+    framing: str | None = None,
 ) -> Any:
-    """Convert the source frame to the 9:16 canvas using RENDER_FRAMING."""
+    """Convert the source frame to the 9:16 canvas.
+
+    `framing` is the clip's own choice from the editor, already mapped to
+    this module's vocabulary by `_framing_mode`; without one it falls back
+    to the RENDER_FRAMING default.
+    """
 
     width = settings.RENDER_WIDTH
     height = settings.RENDER_HEIGHT
-    framing = settings.RENDER_FRAMING.lower()
+    framing = (framing or settings.RENDER_FRAMING).lower()
     filters = _available_filters()
 
     if framing == "auto":
@@ -650,7 +686,9 @@ def _frame_9x16(
             source_path, start_time, duration, width, height
         )
         if speaker is not None:
-            return _speaker_framed(main_input, speaker, width, height, filters)
+            return _speaker_framed(
+                main_input, speaker, width, height, duration, filters
+            )
         # No confident subject: the blurred fill shows the whole frame,
         # which is the safe answer when we don't know where to look.
         framing = "blur"
@@ -696,11 +734,27 @@ def _frame_9x16(
     )
 
 
+def _framing_mode(clip: Clip) -> str:
+    """The framing this clip was set to in the editor, as a render mode.
+
+    The editor speaks in outcomes (`speaker_focus`, `dynamic_blur`, `fit`)
+    and this module in mechanisms (`auto`, `blur`, `pad`), so the two
+    vocabularies meet here rather than leaking into each other.
+    """
+
+    return {
+        ClipFraming.speaker_focus: "auto",
+        ClipFraming.dynamic_blur: "blur",
+        ClipFraming.fit: "pad",
+    }.get(clip.framing_mode, settings.RENDER_FRAMING.lower())
+
+
 def _speaker_framed(
     main_input: Any,
     framing: SpeakerFraming,
     width: int,
     height: int,
+    duration: float,
     filters: set[str],
 ) -> Any:
     """Crop the source to the speaker, splitting the screen where two talk.
@@ -709,7 +763,8 @@ def _speaker_framed(
     more than one person in the conversation, a stack of per-speaker panes
     is overlaid for exactly those stretches (`enable`), so the short cuts
     to a split screen and back the way an editor would rather than holding
-    one layout for the whole clip.
+    one layout for the whole clip. The panes dissolve in and out over a
+    quarter of a second so the layout change lands softly.
 
     Crop x/y are time expressions that step wherever the framing moves, so
     they are passed to ffmpeg as strings.
@@ -759,6 +814,36 @@ def _speaker_framed(
         # Rounding to even pane heights can leave a sliver; fill it rather
         # than letting the single-speaker frame show through the gap.
         stacked = stacked.filter("pad", width, height, 0, 0, color="black")
+
+    # Dissolve the panes in and out over the single-speaker frame instead
+    # of snapping to them. The fade sits just *inside* each stretch, so it
+    # mixes two framings of the same footage rather than blending across
+    # the cut that starts it. Each fade is fenced to its own window with
+    # `enable`, otherwise a later one would blank everything before it.
+    stacked = stacked.filter("format", "yuva420p")
+    for section in split.sections:
+        start, end = section.start_time, section.end_time
+        # A clip that opens or ends mid-conversation is already in the
+        # layout -- dissolving in from a frame nobody saw just looks like
+        # the player stuttering on the first frames.
+        if start > _SPLIT_FADE_SECONDS:
+            stacked = stacked.filter(
+                "fade",
+                type="in",
+                start_time=f"{start:.2f}",
+                duration=f"{_SPLIT_FADE_SECONDS:.2f}",
+                alpha=1,
+                enable=f"between(t,{start:.2f},{start + _SPLIT_FADE_SECONDS:.2f})",
+            )
+        if end < duration - _SPLIT_FADE_SECONDS:
+            stacked = stacked.filter(
+                "fade",
+                type="out",
+                start_time=f"{end - _SPLIT_FADE_SECONDS:.2f}",
+                duration=f"{_SPLIT_FADE_SECONDS:.2f}",
+                alpha=1,
+                enable=f"between(t,{end - _SPLIT_FADE_SECONDS:.2f},{end:.2f})",
+            )
 
     shown = "+".join(
         f"between(t,{section.start_time:.2f},{section.end_time:.2f})"
@@ -867,6 +952,8 @@ def _run_ffmpeg(
     broll_assets: list[BrollAsset],
     output_path: Path,
     tmp_dir: Path,
+    framing: str | None = None,
+    caption_style: ClipCaptionStyle | None = None,
 ) -> None:
     """Build and execute the ffmpeg filter graph for one clip.
 
@@ -883,10 +970,11 @@ def _run_ffmpeg(
         source_path=source_path,
         start_time=start_time,
         duration=duration,
+        framing=framing,
     )
     video_stream = video_stream.filter("fps", fps=settings.RENDER_FPS)
     video_stream = _apply_broll(video_stream, broll_assets, duration, tmp_dir)
-    video_stream = _apply_captions(video_stream, captions, tmp_dir)
+    video_stream = _apply_captions(video_stream, captions, tmp_dir, caption_style)
 
     _encode(video_stream, main_input, output_path)
 

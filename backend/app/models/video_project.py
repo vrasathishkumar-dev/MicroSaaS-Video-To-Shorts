@@ -5,10 +5,11 @@ from __future__ import annotations
 import enum
 from typing import TYPE_CHECKING
 
-from sqlalchemy import Enum, Float, ForeignKey, String, Text
+from sqlalchemy import Boolean, Enum, Float, ForeignKey, String, Text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.models.base import Base, TimestampMixin
+from app.models.clip import ClipCaptionStyle, ClipFraming
 
 if TYPE_CHECKING:
     from app.models.clip import Clip
@@ -34,6 +35,18 @@ class VideoProjectStatus(str, enum.Enum):
     failed = "failed"
 
 
+class ClipLength(str, enum.Enum):
+    """How long the shorts cut from this video should aim to be.
+
+    Chosen at submission, because it decides how the highlights are cut --
+    not something that can be applied to clips after the fact.
+    """
+
+    auto = "auto"
+    fast = "fast"
+    in_depth = "in_depth"
+
+
 class VideoProject(Base, TimestampMixin):
     """A long-form video submitted for processing into short clips."""
 
@@ -56,6 +69,36 @@ class VideoProject(Base, TimestampMixin):
     )
     duration_seconds: Mapped[float | None] = mapped_column(Float, nullable=True)
     error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+    # What the submitter asked for. `target_clip_length` shapes how the
+    # highlights are cut; the rest are the defaults every clip generated
+    # from this video is born with, so the shorts come out as ordered
+    # without anyone opening the editor. All still editable per clip
+    # afterwards -- these are starting points, not locks.
+    target_clip_length: Mapped[ClipLength] = mapped_column(
+        Enum(ClipLength, name="clip_length"),
+        default=ClipLength.auto,
+        server_default=ClipLength.auto.value,
+        nullable=False,
+    )
+    framing_mode: Mapped[ClipFraming] = mapped_column(
+        Enum(ClipFraming, name="clip_framing"),
+        default=ClipFraming.speaker_focus,
+        server_default=ClipFraming.speaker_focus.value,
+        nullable=False,
+    )
+    caption_style: Mapped[ClipCaptionStyle] = mapped_column(
+        Enum(ClipCaptionStyle, name="clip_caption_style"),
+        default=ClipCaptionStyle.hormozi,
+        server_default=ClipCaptionStyle.hormozi.value,
+        nullable=False,
+    )
+    auto_broll: Mapped[bool] = mapped_column(
+        Boolean,
+        default=True,
+        server_default="true",
+        nullable=False,
+    )
 
     # Relationships
     user: Mapped[User] = relationship("User", back_populates="video_projects")

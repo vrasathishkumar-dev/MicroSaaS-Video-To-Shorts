@@ -25,6 +25,9 @@ export type VideoProjectStatus =
   | 'ready'
   | 'failed';
 
+/** How long the shorts cut from a video should aim to be. */
+export type ClipLength = 'auto' | 'fast' | 'in_depth';
+
 export interface VideoProject {
   id: number;
   title: string;
@@ -33,6 +36,14 @@ export interface VideoProject {
   status: VideoProjectStatus;
   duration_seconds: number | null;
   error_message: string | null;
+  /**
+   * What the submitter asked for. The length shapes how highlights are cut;
+   * framing, captions and B-roll become every generated clip's own settings.
+   */
+  target_clip_length: ClipLength;
+  framing_mode: FramingMode;
+  caption_style: CaptionStylePreset;
+  auto_broll: boolean;
   created_at: string;
   updated_at: string;
 }
@@ -58,6 +69,8 @@ export interface Clip {
   order_index: number;
   status: ClipStatus;
   caption_text: string | null;
+  /** How the export fills the 9:16 canvas -- the editor's framing toggle. */
+  framing_mode: FramingMode;
   video_file_path: string | null;
   thumbnail_path: string | null;
   broll_assets?: BrollAsset[];
@@ -65,18 +78,44 @@ export interface Clip {
   virality_reason?: string;
   hook_score?: number;
   engagement_score?: number;
-  caption_style?: CaptionStylePreset;
+  /** Which caption look burns into the export. */
+  caption_style: CaptionStylePreset;
   created_at: string;
   updated_at: string;
 }
 
-/** One Speaker Focus crop window, as fractions (0-1) of the source frame. */
+/**
+ * One caption exactly as the renderer will draw it, timed from the clip's
+ * own start. `active_word` is the index of the word lit up during this
+ * frame, for the presets that highlight word by word.
+ */
+export interface CaptionFrame {
+  start_time: number;
+  end_time: number;
+  text: string;
+  active_word: number | null;
+}
+
+/** The caption timeline a clip will be exported with. */
+export interface ClipCaptions {
+  clip_id: number;
+  style: CaptionStylePreset;
+  events: CaptionFrame[];
+}
+
+/**
+ * One Speaker Focus crop window, as fractions (0-1) of the source frame.
+ *
+ * `at_cut` mirrors the renderer: snap into place (the source cut here too)
+ * or ease across (the crop moved mid-shot, following the conversation).
+ */
 export interface SpeakerFocusWindow {
   start_time: number;
   x: number;
   y: number;
   width: number;
   height: number;
+  at_cut: boolean;
 }
 
 /**
@@ -107,13 +146,20 @@ export interface ClipFraming {
   split_sections: SplitScreenSection[];
 }
 
+/** How a clip fills the 9:16 canvas. Mirrors the backend's ClipFraming. */
+export type FramingMode = 'speaker_focus' | 'dynamic_blur' | 'fit';
+
+/**
+ * Caption looks the renderer can actually burn in. Mirrors the backend's
+ * ClipCaptionStyle -- a preset listed here that the renderer doesn't know
+ * would export as something the user never picked.
+ */
 export type CaptionStylePreset =
   | 'hormozi'
   | 'neon'
   | 'minimal'
   | 'karaoke'
-  | 'bold_box'
-  | 'cyberpunk';
+  | 'bold_box';
 
 export type BrollSource = 'pexels' | 'pixabay';
 

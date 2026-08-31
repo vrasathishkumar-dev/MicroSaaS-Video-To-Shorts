@@ -1,18 +1,20 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  PAN_MS,
   activeSpeakerWindow,
   activeSplitSection,
   speakerFocusStyle,
 } from '@/lib/framing';
 import type { SpeakerFocusWindow, SplitScreenSection } from '@/types';
 
-const windowAt = (start: number, x: number): SpeakerFocusWindow => ({
+const windowAt = (start: number, x: number, atCut = true): SpeakerFocusWindow => ({
   start_time: start,
   x,
   y: 0.25,
   width: 0.2,
   height: 0.63,
+  at_cut: atCut,
 });
 
 describe('activeSpeakerWindow', () => {
@@ -44,11 +46,12 @@ describe('speakerFocusStyle', () => {
       y: 0.25,
       width: 0.2,
       height: 0.5,
+      at_cut: true,
     });
 
     // 1/0.2 of the container wide, slid left by half of the source width,
     // which is 250% of its own new width.
-    expect(style).toEqual({
+    expect(style).toMatchObject({
       position: 'absolute',
       width: '500%',
       height: '200%',
@@ -61,8 +64,28 @@ describe('speakerFocusStyle', () => {
   it('declines to style anything without a usable window', () => {
     expect(speakerFocusStyle(null)).toBeUndefined();
     expect(
-      speakerFocusStyle({ start_time: 0, x: 0, y: 0, width: 0, height: 0.5 }),
+      speakerFocusStyle({
+        start_time: 0,
+        x: 0,
+        y: 0,
+        width: 0,
+        height: 0.5,
+        at_cut: true,
+      }),
     ).toBeUndefined();
+  });
+});
+
+describe('speakerFocusStyle transitions', () => {
+  it('snaps a window that lands on a cut', () => {
+    expect(speakerFocusStyle(windowAt(4, 0.7))?.transitionDuration).toBe('0ms');
+  });
+
+  it('eases a window that moves mid-shot, matching the render', () => {
+    const style = speakerFocusStyle(windowAt(4, 0.7, false));
+
+    expect(style?.transitionDuration).toBe(`${PAN_MS}ms`);
+    expect(style?.transitionTimingFunction).toContain('cubic-bezier');
   });
 });
 

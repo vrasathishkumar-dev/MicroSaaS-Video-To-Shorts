@@ -32,6 +32,16 @@ export function activeSpeakerWindow(
   return active;
 }
 
+/** How long the crop takes to travel when it moves mid-shot. */
+export const PAN_MS = 500;
+
+/**
+ * Smoothstep, as near as a CSS curve gets: the crop accelerates away and
+ * settles instead of sliding at a constant rate and stopping dead. Matches
+ * the `p * p * (3 - 2p)` ramp the renderer burns into the export.
+ */
+const PAN_EASING = 'cubic-bezier(0.33, 0, 0.67, 1)';
+
 /**
  * Sizing/offset for the preview <video> so `window` fills its container.
  *
@@ -39,6 +49,10 @@ export function activeSpeakerWindow(
  * 1/width and sliding it left by x of its own new width crops to exactly
  * that region with no distortion. Returns undefined when there is nothing
  * to apply, so the caller can fall back to its default framing.
+ *
+ * A window that lands on a cut snaps; one that moves mid-shot eases, so
+ * the preview travels the way the export will. Animating through a cut
+ * would slide the crop over footage that has already changed.
  */
 export function speakerFocusStyle(
   window: SpeakerFocusWindow | null,
@@ -52,6 +66,9 @@ export function speakerFocusStyle(
     left: `${(-window.x * 100) / window.width}%`,
     top: `${(-window.y * 100) / window.height}%`,
     maxWidth: 'none',
+    transitionProperty: 'left, top, width, height',
+    transitionDuration: window.at_cut ? '0ms' : `${PAN_MS}ms`,
+    transitionTimingFunction: PAN_EASING,
   };
 }
 

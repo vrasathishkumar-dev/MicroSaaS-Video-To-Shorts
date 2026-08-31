@@ -27,9 +27,15 @@ from app.auth.rate_limit import rate_limit_video_submit
 from app.database import SessionLocal
 from app.dependencies import get_current_user, get_db
 from app.exceptions import NotFoundError, ValidationAppError
+from app.models.clip import ClipCaptionStyle, ClipFraming
 from app.models.transcript_segment import TranscriptSegment
 from app.models.user import User
-from app.models.video_project import SourceType, VideoProject, VideoProjectStatus
+from app.models.video_project import (
+    ClipLength,
+    SourceType,
+    VideoProject,
+    VideoProjectStatus,
+)
 from app.schemas.video import (
     PaginatedVideoProjects,
     TranscriptSegmentResponse,
@@ -162,6 +168,10 @@ async def create_video_project(
     title: str = Form(...),
     source_type: SourceType = Form(...),
     source_url: str | None = Form(default=None),
+    target_clip_length: ClipLength = Form(default=ClipLength.auto),
+    framing_mode: ClipFraming = Form(default=ClipFraming.speaker_focus),
+    caption_style: ClipCaptionStyle = Form(default=ClipCaptionStyle.hormozi),
+    auto_broll: bool = Form(default=True),
     file: UploadFile | None = File(default=None),
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
@@ -171,6 +181,13 @@ async def create_video_project(
     Accepts multipart/form-data with `title`, `source_type` ("upload" or
     "url"), and either a `file` part (required when source_type="upload")
     or a `source_url` form field (required when source_type="url").
+
+    The remaining fields are what the submit form's options write, and they
+    are what makes the generated shorts come out as asked:
+    `target_clip_length` decides how long the clips are cut,
+    `framing_mode` and `caption_style` become every generated clip's own
+    settings, and `auto_broll` decides whether B-roll is sourced for them.
+    All four have defaults, so a bare submission still works.
     """
 
     rate_limit_video_submit(user.id)
@@ -186,6 +203,10 @@ async def create_video_project(
         source_type=source_type,
         source_url=source_url if source_type == SourceType.url else None,
         status=VideoProjectStatus.pending,
+        target_clip_length=target_clip_length,
+        framing_mode=framing_mode,
+        caption_style=caption_style,
+        auto_broll=auto_broll,
     )
 
     if file is not None:

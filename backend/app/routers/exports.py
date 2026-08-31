@@ -28,6 +28,8 @@ from app.models.broll_asset import BrollAsset
 from app.models.clip import Clip, ClipStatus
 from app.models.user import User
 from app.schemas.export import (
+    CaptionFrame,
+    ClipCaptionsResponse,
     ClipFramingResponse,
     ExportStatusResponse,
     SpeakerFocusWindow,
@@ -35,9 +37,10 @@ from app.schemas.export import (
 )
 from app.services import task_queue
 from app.services.broll_sourcing import auto_source_broll
+from app.services.caption_render import CAPTION_STYLES, caption_frames
 from app.services.reframe import SpeakerWindow, compute_speaker_framing
 from app.services.storage import get_file_path
-from app.services.video_render import render_clip
+from app.services.video_render import _caption_events, render_clip
 
 logger = logging.getLogger(__name__)
 
@@ -70,11 +73,18 @@ async def _ensure_broll(db: Session, clip: Clip) -> None:
     can be removed or replaced before a re-export, which is what CLAUDE.md
     requires of any automatic insertion.
 
+    Skipped entirely for a video submitted with B-roll switched off --
+    that choice is the whole point of the toggle.
+
     Best-effort by design: no API keys, no search results, or a provider
     outage must not block the export.
     """
 
     if not settings.BROLL_AUTO_ON_EXPORT:
+        return
+    if clip.video_project is not None and not clip.video_project.auto_broll:
+        # Switched off when the video was submitted: no B-roll unless the
+        # user adds it themselves in the editor.
         return
     if not (settings.PEXELS_API_KEY or settings.PIXABAY_API_KEY):
         return
@@ -227,6 +237,7 @@ def clip_framing(
             y=window.y / framing.source_height,
             width=crop_width / framing.source_width,
             height=crop_height / framing.source_height,
+            at_cut=window.at_cut,
         )
 
     split = framing.split
@@ -247,6 +258,48 @@ def clip_framing(
                 ],
             )
             for section in (split.sections if split else ())
+        ],
+    )
+
+
+@router.get("/{clip_id}/captions", response_model=ClipCaptionsResponse)
+def clip_captions(
+    clip_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> ClipCaptionsResponse:
+    """The caption timeline this clip will be exported with.
+
+    Captions come from the transcript unless the user wrote their own, so
+    a clip that has never been edited still has plenty to say -- and the
+    editor, which only knows about `caption_text`, would otherwise show a
+    silent preview for a short that exports fully subtitled. Serving the
+    render path's own timeline keeps the two in step, down to which word
+    is lit up.
+    """
+
+    clip = _get_owned_clip(db, clip_id, current_user.id)
+    duration = max(clip.end_time - clip.start_time, 0.1)
+    segments = (
+        list(clip.video_project.transcript_segments) if clip.video_project else []
+    )
+
+    events = _caption_events(
+        caption_text=clip.caption_text,
+        transcript_segments=segments,
+        clip_start=clip.start_time,
+        duration=duration,
+    )
+    style = CAPTION_STYLES.get(clip.caption_style.value)
+
+    return ClipCaptionsResponse(
+        clip_id=clip.id,
+        style=clip.caption_style,
+        events=[
+            CaptionFrame(
+                start_time=start, end_time=end, text=text, active_word=active_word
+            )
+            for start, end, text, active_word in caption_frames(events, style)
         ],
     )
 

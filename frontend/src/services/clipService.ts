@@ -1,11 +1,21 @@
 import api, { API_URL, getAccessToken } from '@/services/api';
-import type { Clip, ClipFraming, PaginatedResponse } from '@/types';
+import type {
+  CaptionStylePreset,
+  Clip,
+  ClipCaptions,
+  ClipFraming,
+  FramingMode,
+  PaginatedResponse,
+} from '@/types';
 
 export interface UpdateClipPayload {
   title?: string;
   start_time?: number;
   end_time?: number;
   caption_text?: string;
+  /** Framing and caption look are read back by the renderer at export. */
+  framing_mode?: FramingMode;
+  caption_style?: CaptionStylePreset;
 }
 
 /**
@@ -90,5 +100,16 @@ export async function deleteClip(id: number): Promise<void> {
  */
 export async function getClipFraming(clipId: number): Promise<ClipFraming> {
   const { data } = await api.get<ClipFraming>(`/clips/${clipId}/framing`);
+  return data;
+}
+
+/**
+ * The caption timeline this clip will be exported with -- built by the
+ * renderer from the transcript, or from the user's own caption text. The
+ * editor previews these rather than guessing, so what plays matches what
+ * burns in.
+ */
+export async function getClipCaptions(clipId: number): Promise<ClipCaptions> {
+  const { data } = await api.get<ClipCaptions>(`/clips/${clipId}/captions`);
   return data;
 }

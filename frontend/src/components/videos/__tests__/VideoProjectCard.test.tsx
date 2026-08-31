@@ -13,6 +13,10 @@ const baseVideo: VideoProject = {
   status: 'ready',
   duration_seconds: 125,
   error_message: null,
+  target_clip_length: 'auto',
+  framing_mode: 'speaker_focus',
+  caption_style: 'hormozi',
+  auto_broll: true,
   created_at: '2024-01-15T00:00:00Z',
   updated_at: '2024-01-15T00:00:00Z',
 };

@@ -1,6 +1,9 @@
 import type { AxiosProgressEvent } from 'axios';
 import api from '@/services/api';
 import type {
+  CaptionStylePreset,
+  ClipLength,
+  FramingMode,
   PaginatedResponse,
   TranscriptSegment,
   VideoProject,
@@ -13,6 +16,11 @@ export interface SubmitVideoPayload {
   sourceType: VideoSourceType;
   file?: File;
   sourceUrl?: string;
+  /** The submit form's AI options -- see submitVideo. */
+  targetClipLength: ClipLength;
+  framingMode: FramingMode;
+  captionStyle: CaptionStylePreset;
+  autoBroll: boolean;
 }
 
 /** Fetch a page of the current user's video projects. */
@@ -50,6 +58,13 @@ export async function submitVideo(
   if (payload.sourceUrl) {
     formData.append('source_url', payload.sourceUrl);
   }
+  // What the shorts should come out as. Sent at submission because the
+  // length decides how the highlights are cut, and the rest become every
+  // generated clip's own settings (still editable per clip afterwards).
+  formData.append('target_clip_length', payload.targetClipLength);
+  formData.append('framing_mode', payload.framingMode);
+  formData.append('caption_style', payload.captionStyle);
+  formData.append('auto_broll', String(payload.autoBroll));
 
   const { data } = await api.post<VideoProject>('/videos', formData, {
     onUploadProgress,

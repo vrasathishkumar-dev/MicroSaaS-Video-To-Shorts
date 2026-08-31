@@ -226,12 +226,30 @@ def _subject(centre_x: float) -> _Subject:
 
 class TestExpressionHelpers:
     def test_single_shot_needs_no_conditional(self) -> None:
-        assert _build_step_expression([(0.0, 512)]) == "512"
+        assert _build_step_expression([(0.0, 512, True)]) == "512"
 
-    def test_expression_steps_at_each_shot_boundary(self) -> None:
-        expression = _build_step_expression([(0.0, 100), (2.0, 800), (5.5, 300)])
+    def test_the_crop_snaps_at_a_cut(self) -> None:
+        """The picture changes at that instant anyway; panning across a cut
+        would slide over footage that has already moved on."""
+
+        expression = _build_step_expression(
+            [(0.0, 100, True), (2.0, 800, True), (5.5, 300, True)]
+        )
 
         assert expression == "if(lt(t,2.00),100,if(lt(t,5.50),800,300))"
+
+    def test_the_crop_eases_when_it_moves_inside_a_shot(self) -> None:
+        expression = _build_step_expression([(0.0, 100, True), (2.0, 800, False)])
+
+        # Holds, travels for half a second, then rests on the new position.
+        assert expression.startswith("if(lt(t,2.00),100,if(lt(t,2.50),")
+        assert expression.endswith(",800))")
+        assert "clip((t-2.00)/0.50,0,1)" in expression
+
+    def test_a_move_that_goes_nowhere_needs_no_ramp(self) -> None:
+        expression = _build_step_expression([(0.0, 400, True), (2.0, 400, False)])
+
+        assert expression == "if(lt(t,2.00),400,400)"
 
     def test_near_identical_framings_are_merged(self) -> None:
         # 3px apart is the same shot as far as the viewer is concerned;

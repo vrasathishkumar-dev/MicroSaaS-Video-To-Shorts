@@ -14,6 +14,8 @@ const baseClip: Clip = {
   order_index: 0,
   status: 'ready',
   caption_text: null,
+  framing_mode: 'speaker_focus',
+  caption_style: 'hormozi',
   video_file_path: null,
   thumbnail_path: null,
   created_at: '2024-01-01T00:00:00Z',

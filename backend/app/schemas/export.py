@@ -6,7 +6,7 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict
 
-from app.models.clip import ClipStatus
+from app.models.clip import ClipCaptionStyle, ClipStatus
 
 
 class ExportStatusResponse(BaseModel):
@@ -29,6 +29,10 @@ class SpeakerFocusWindow(BaseModel):
 
     Normalised rather than in pixels so the editor can apply it to a
     preview element of any size without knowing the source resolution.
+
+    `at_cut` mirrors what the renderer does to get here: snap into place
+    (the source cut at that moment too) or ease across (the crop moved
+    mid-shot, because the other person started talking).
     """
 
     start_time: float
@@ -36,6 +40,7 @@ class SpeakerFocusWindow(BaseModel):
     y: float
     width: float
     height: float
+    at_cut: bool = True
 
 
 class SplitScreenSection(BaseModel):
@@ -72,3 +77,30 @@ class ClipFramingResponse(BaseModel):
     mode: Literal["speaker_focus", "rendered", "unavailable"]
     windows: list[SpeakerFocusWindow] = []
     split_sections: list[SplitScreenSection] = []
+
+
+class CaptionFrame(BaseModel):
+    """One caption exactly as the renderer will draw it.
+
+    `active_word` is the index of the word lit up during this frame, for
+    the styles that highlight word by word -- None where the whole caption
+    is drawn in one colour. Frames come straight from the render path, so
+    the preview shows the same words, at the same moments, as the export.
+    """
+
+    start_time: float
+    end_time: float
+    text: str
+    active_word: int | None = None
+
+
+class ClipCaptionsResponse(BaseModel):
+    """The caption timeline the export will burn into a clip.
+
+    Times are relative to the clip's own start, so the editor can match
+    them against its playhead directly.
+    """
+
+    clip_id: int
+    style: ClipCaptionStyle
+    events: list[CaptionFrame] = []

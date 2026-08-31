@@ -6,7 +6,8 @@ from datetime import datetime
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-from app.models.video_project import SourceType, VideoProjectStatus
+from app.models.clip import ClipCaptionStyle, ClipFraming
+from app.models.video_project import ClipLength, SourceType, VideoProjectStatus
 
 
 class VideoProjectCreate(BaseModel):
@@ -22,6 +23,14 @@ class VideoProjectCreate(BaseModel):
     title: str = Field(min_length=1, max_length=255)
     source_type: SourceType
     source_url: str | None = Field(default=None, max_length=2048)
+
+    # How the shorts should come out. `target_clip_length` shapes how the
+    # highlights are cut; the others are inherited by every clip generated
+    # from this video and stay editable per clip afterwards.
+    target_clip_length: ClipLength = ClipLength.auto
+    framing_mode: ClipFraming = ClipFraming.speaker_focus
+    caption_style: ClipCaptionStyle = ClipCaptionStyle.hormozi
+    auto_broll: bool = True
 
     @model_validator(mode="after")
     def _validate_source_url_required_for_url_type(self) -> VideoProjectCreate:
@@ -54,6 +63,10 @@ class VideoProjectResponse(BaseModel):
     status: VideoProjectStatus
     duration_seconds: float | None = None
     error_message: str | None = None
+    target_clip_length: ClipLength
+    framing_mode: ClipFraming
+    caption_style: ClipCaptionStyle
+    auto_broll: bool
     created_at: datetime
     updated_at: datetime
 

@@ -25,6 +25,31 @@ class ClipStatus(str, enum.Enum):
     failed = "failed"
 
 
+class ClipFraming(str, enum.Enum):
+    """How the clip fills the 9:16 canvas, as chosen in the editor.
+
+    The editor's vocabulary, not ffmpeg's: `speaker_focus` crops to
+    whoever is talking (splitting the screen where two people are in
+    conversation), `dynamic_blur` fits the whole frame over a blurred fill,
+    and `fit` letterboxes it. app.services.video_render maps these onto its
+    own framing modes.
+    """
+
+    speaker_focus = "speaker_focus"
+    dynamic_blur = "dynamic_blur"
+    fit = "fit"
+
+
+class ClipCaptionStyle(str, enum.Enum):
+    """Which caption look burns into the export."""
+
+    hormozi = "hormozi"
+    neon = "neon"
+    bold_box = "bold_box"
+    karaoke = "karaoke"
+    minimal = "minimal"
+
+
 class Clip(Base, TimestampMixin):
     """A short, vertical clip generated from a VideoProject."""
 
@@ -45,6 +70,20 @@ class Clip(Base, TimestampMixin):
         Enum(ClipStatus, name="clip_status"), default=ClipStatus.draft, nullable=False
     )
     caption_text: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # Editor choices that the export has to honour -- a clip rendered with
+    # framing or captions the user didn't pick is a bug they can see.
+    framing_mode: Mapped[ClipFraming] = mapped_column(
+        Enum(ClipFraming, name="clip_framing"),
+        default=ClipFraming.speaker_focus,
+        server_default=ClipFraming.speaker_focus.value,
+        nullable=False,
+    )
+    caption_style: Mapped[ClipCaptionStyle] = mapped_column(
+        Enum(ClipCaptionStyle, name="clip_caption_style"),
+        default=ClipCaptionStyle.hormozi,
+        server_default=ClipCaptionStyle.hormozi.value,
+        nullable=False,
+    )
     video_file_path: Mapped[str | None] = mapped_column(String(1024), nullable=True)
     thumbnail_path: Mapped[str | None] = mapped_column(String(1024), nullable=True)
 

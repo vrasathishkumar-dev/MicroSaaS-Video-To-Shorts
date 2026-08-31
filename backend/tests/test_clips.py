@@ -6,20 +6,30 @@ from fastapi.testclient import TestClient
 from sqlalchemy.orm import Session
 
 from app.models.broll_asset import BrollAsset, BrollSource
-from app.models.clip import Clip
+from app.models.clip import Clip, ClipCaptionStyle, ClipFraming
 from app.models.transcript_segment import TranscriptSegment
 from app.models.user import User
-from app.models.video_project import SourceType, VideoProject, VideoProjectStatus
+from app.models.video_project import (
+    ClipLength,
+    SourceType,
+    VideoProject,
+    VideoProjectStatus,
+)
 
 
 def _make_ready_project_with_highlights(
-    db_session: Session, user: User, n_highlights: int = 2, n_plain: int = 1
+    db_session: Session,
+    user: User,
+    n_highlights: int = 2,
+    n_plain: int = 1,
+    **project_options,
 ) -> VideoProject:
     project = VideoProject(
         user_id=user.id,
         title="Ready project",
         source_type=SourceType.upload,
         status=VideoProjectStatus.ready,
+        **project_options,
     )
     db_session.add(project)
     db_session.commit()
@@ -244,6 +254,64 @@ class TestGenerate:
         assert response.status_code == 404
 
 
+class TestGeneratedClipsFollowTheSubmission:
+    """What the submit form asked for has to show up in the clips -- the
+    options are chosen before there is anything to edit, so if generation
+    ignores them the user never gets what they asked for."""
+
+    def test_clips_inherit_the_framing_and_caption_style(
+        self, client: TestClient, auth_headers: dict[str, str], db_session: Session, test_user
+    ) -> None:
+        project = _make_ready_project_with_highlights(
+            db_session,
+            test_user,
+            n_highlights=2,
+            framing_mode=ClipFraming.dynamic_blur,
+            caption_style=ClipCaptionStyle.neon,
+        )
+
+        response = client.post(
+            "/api/v1/clips/generate",
+            json={"video_project_id": project.id},
+            headers=auth_headers,
+        )
+
+        assert response.status_code == 201
+        clips = response.json()
+        assert clips
+        assert all(clip["framing_mode"] == "dynamic_blur" for clip in clips)
+        assert all(clip["caption_style"] == "neon" for clip in clips)
+
+    def test_fast_shorts_are_cut_shorter_than_in_depth_ones(
+        self, client: TestClient, auth_headers: dict[str, str], db_session: Session, test_user
+    ) -> None:
+        """Same highlights, different requested length: the windows the
+        generator cuts have to differ, or the setting means nothing."""
+
+        fast = _make_ready_project_with_highlights(
+            db_session, test_user, n_highlights=1, target_clip_length=ClipLength.fast
+        )
+        in_depth = _make_ready_project_with_highlights(
+            db_session, test_user, n_highlights=1, target_clip_length=ClipLength.in_depth
+        )
+
+        def generate(project: VideoProject) -> float:
+            response = client.post(
+                "/api/v1/clips/generate",
+                json={"video_project_id": project.id},
+                headers=auth_headers,
+            )
+            assert response.status_code == 201
+            clip = response.json()[0]
+            return clip["end_time"] - clip["start_time"]
+
+        fast_duration = generate(fast)
+        in_depth_duration = generate(in_depth)
+
+        assert fast_duration <= 30.0, fast_duration
+        assert in_depth_duration > fast_duration
+
+
 class TestListAndGet:
     def test_list_clips_filtered_by_video_project(
         self, client: TestClient, auth_headers: dict[str, str], db_session: Session, test_user
@@ -339,6 +407,59 @@ class TestUpdate:
         assert body["start_time"] == 1.5
         assert body["end_time"] == 8.0
         assert body["caption_text"] == "Hi!"
+
+    def test_update_framing_and_caption_style(
+        self, client: TestClient, auth_headers: dict[str, str], db_session: Session, test_user
+    ) -> None:
+        """The studio's framing toggle and caption picker write here. They
+        have to persist, because the renderer reads them back at export --
+        a choice that only lives in the browser is a choice the finished
+        short doesn't have."""
+
+        project = _make_ready_project_with_highlights(db_session, test_user, n_highlights=1)
+        gen_resp = client.post(
+            "/api/v1/clips/generate",
+            json={"video_project_id": project.id},
+            headers=auth_headers,
+        )
+        clip_id = gen_resp.json()[0]["id"]
+        # A freshly generated clip renders as speaker focus with Hormozi
+        # captions unless the user says otherwise.
+        assert gen_resp.json()[0]["framing_mode"] == "speaker_focus"
+        assert gen_resp.json()[0]["caption_style"] == "hormozi"
+
+        response = client.put(
+            f"/api/v1/clips/{clip_id}",
+            json={"framing_mode": "dynamic_blur", "caption_style": "karaoke"},
+            headers=auth_headers,
+        )
+
+        assert response.status_code == 200
+        assert response.json()["framing_mode"] == "dynamic_blur"
+        assert response.json()["caption_style"] == "karaoke"
+
+        reread = client.get(f"/api/v1/clips/{clip_id}", headers=auth_headers)
+        assert reread.json()["framing_mode"] == "dynamic_blur"
+        assert reread.json()["caption_style"] == "karaoke"
+
+    def test_update_rejects_a_framing_mode_the_renderer_cannot_honour(
+        self, client: TestClient, auth_headers: dict[str, str], db_session: Session, test_user
+    ) -> None:
+        project = _make_ready_project_with_highlights(db_session, test_user, n_highlights=1)
+        gen_resp = client.post(
+            "/api/v1/clips/generate",
+            json={"video_project_id": project.id},
+            headers=auth_headers,
+        )
+        clip_id = gen_resp.json()[0]["id"]
+
+        response = client.put(
+            f"/api/v1/clips/{clip_id}",
+            json={"framing_mode": "cinematic_zoom"},
+            headers=auth_headers,
+        )
+
+        assert response.status_code == 422
 
     def test_update_clip_partial(
         self, client: TestClient, auth_headers: dict[str, str], db_session: Session, test_user

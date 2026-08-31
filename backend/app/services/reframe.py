@@ -167,14 +167,27 @@ _MIN_CROP_HEIGHT_RATIO = 0.45
 # a clip doesn't get a time expression for sub-pixel-ish differences.
 _SAME_FRAMING_PIXELS = 24
 
+# How long the crop takes to travel when it moves mid-shot. Long enough to
+# read as a camera move rather than a glitch, short enough that the new
+# speaker isn't half a sentence in before the frame arrives.
+_PAN_SECONDS = 0.5
+
 
 @dataclass(frozen=True)
 class SpeakerWindow:
-    """Where the crop sits from `start_time` (seconds into the clip) on."""
+    """Where the crop sits from `start_time` (seconds into the clip) on.
+
+    `at_cut` says how the crop should get there. A window that starts where
+    the source itself cuts snaps into place -- panning across a hard cut
+    means sliding over footage that has already changed, which reads as a
+    mistake. A window that starts mid-shot, because the other person
+    started talking, eases across instead.
+    """
 
     start_time: float
     x: int
     y: int
+    at_cut: bool = True
 
 
 @dataclass(frozen=True)
@@ -340,8 +353,8 @@ def crop_expressions(windows: Sequence[SpeakerWindow]) -> tuple[str, str]:
     """
 
     return (
-        _build_step_expression([(w.start_time, w.x) for w in windows]),
-        _build_step_expression([(w.start_time, w.y) for w in windows]),
+        _build_step_expression([(w.start_time, w.x, w.at_cut) for w in windows]),
+        _build_step_expression([(w.start_time, w.y, w.at_cut) for w in windows]),
     )
 
 
@@ -385,7 +398,9 @@ def _compute_framing(
     shots = _shot_windows(motion, sample_interval, duration)
     faces = _detect_faces(luma)
 
-    moments: list[tuple[float, _Subject | None]] = []
+    # (start_time, subject, at_cut) -- at_cut is False only where the crop
+    # moves inside a continuous shot, which is where easing belongs.
+    moments: list[tuple[float, _Subject | None, bool]] = []
     conversations: list[tuple[float, float, list[_Subject]]] = []
     for first, last, shot_start in shots:
         tracks = _face_tracks(faces, first, last)
@@ -395,7 +410,7 @@ def _compute_framing(
             # stacked, and keep the liveliest as what plays underneath.
             shot_end = shot_start + (last - first) * sample_interval
             conversations.append((shot_start, shot_end, speakers))
-            moments.append((shot_start, speakers[0]))
+            moments.append((shot_start, speakers[0], True))
         elif tracks:
             moments.extend(
                 _speaker_moments(
@@ -404,27 +419,33 @@ def _compute_framing(
             )
         else:
             moments.append(
-                (shot_start, _subject_box(motion[first:last], skin[first : last + 1]))
+                (
+                    shot_start,
+                    _subject_box(motion[first:last], skin[first : last + 1]),
+                    True,
+                )
             )
 
-    if all(subject is None for _, subject in moments):
+    if all(subject is None for _, subject, _ in moments):
         logger.info(
             "reframe: no face and no single active region; falling back to "
             "blurred-fill framing"
         )
         return None
 
-    subjects = _fill_unknown([subject for _, subject in moments])
+    subjects = _fill_unknown([subject for _, subject, _ in moments])
     crop_width, crop_height = _crop_size(
         subjects, source_width, source_height, target_ratio
     )
 
     windows = []
-    for (moment_start, _), subject in zip(moments, subjects, strict=True):
+    for (moment_start, _, at_cut), subject in zip(moments, subjects, strict=True):
         x, y = _window_position(
             subject, crop_width, crop_height, source_width, source_height
         )
-        windows.append(SpeakerWindow(start_time=moment_start, x=x, y=y))
+        windows.append(
+            SpeakerWindow(start_time=moment_start, x=x, y=y, at_cut=at_cut)
+        )
     windows = _merge_equal_framings(windows)
 
     split = _split_framing(
@@ -782,7 +803,7 @@ def _speaker_moments(  # type: ignore[no-untyped-def]
     last_row: int,
     shot_start: float,
     sample_interval: float,
-) -> list[tuple[float, _Subject]]:
+) -> list[tuple[float, _Subject, bool]]:
     """Who to frame, and from when, across one shot.
 
     The shot is walked in short segments; in each, the face whose mouth
@@ -795,7 +816,7 @@ def _speaker_moments(  # type: ignore[no-untyped-def]
     segment_rows = max(1, int(round(_SPEAKER_SEGMENT_SECONDS / sample_interval)))
     hold_rows = max(1, int(round(_MIN_SPEAKER_HOLD_SECONDS / sample_interval)))
 
-    moments: list[tuple[float, _Subject]] = []
+    moments: list[tuple[float, _Subject, bool]] = []
     current: int | None = None
     held_since = first_row
 
@@ -817,8 +838,12 @@ def _speaker_moments(  # type: ignore[no-untyped-def]
 
         subject = _face_subject(_median_box(tracks[current]))
         start = shot_start + (row - first_row) * sample_interval
-        if not moments or moments[-1][1] != subject:
-            moments.append((start if moments else shot_start, subject))
+        if not moments:
+            # The shot's opening framing arrives with the cut itself.
+            moments.append((shot_start, subject, True))
+        elif moments[-1][1] != subject:
+            # The conversation turned over mid-shot: ease across to them.
+            moments.append((start, subject, False))
 
     return moments
 
@@ -1196,19 +1221,47 @@ def _merge_equal_framings(windows: list[SpeakerWindow]) -> list[SpeakerWindow]:
     return merged
 
 
-def _build_step_expression(positions: list[tuple[float, int]]) -> str:
-    """Build an ffmpeg `crop` expression that steps when the crop moves.
+def _build_step_expression(positions: list[tuple[float, int, bool]]) -> str:
+    """Build the ffmpeg `crop` expression for one axis over time.
 
-    Produces `if(lt(t,T1),V0,if(lt(t,T2),V1,V2))`. ffmpeg-python escapes the
-    commas for the filtergraph, so this can be passed straight through as a
-    filter argument.
+    Each entry is `(start_time, value, at_cut)`. A move that lands on a cut
+    steps -- `if(lt(t,T),V0,V1)` -- because the picture changes at that
+    instant anyway. A move inside a shot eases across over `_PAN_SECONDS`
+    on a smoothstep curve, so the crop accelerates away and settles rather
+    than sliding at a constant rate and stopping dead.
+
+    ffmpeg-python escapes the commas for the filtergraph, so the result can
+    be passed straight through as a filter argument.
     """
 
     expression = str(positions[-1][1])
     for index in range(len(positions) - 2, -1, -1):
-        boundary = positions[index + 1][0]
-        expression = f"if(lt(t,{boundary:.2f}),{positions[index][1]},{expression})"
+        start, value, _ = positions[index]
+        boundary, next_value, at_cut = positions[index + 1]
+
+        if at_cut or value == next_value:
+            expression = f"if(lt(t,{boundary:.2f}),{value},{expression})"
+            continue
+
+        # Hold, then travel, then hand over to whatever comes next.
+        travel = _ease_expression(value, next_value, boundary)
+        expression = (
+            f"if(lt(t,{boundary:.2f}),{value},"
+            f"if(lt(t,{boundary + _PAN_SECONDS:.2f}),{travel},{expression}))"
+        )
     return expression
+
+
+def _ease_expression(start_value: int, end_value: int, start_time: float) -> str:
+    """Smoothstep from one crop position to another, in ffmpeg's expression
+    language: `V0 + (V1-V0) * p^2 * (3-2p)`, with `p` the clipped progress
+    through the move."""
+
+    progress = f"clip((t-{start_time:.2f})/{_PAN_SECONDS:.2f},0,1)"
+    return (
+        f"({start_value}+({end_value - start_value})"
+        f"*({progress})*({progress})*(3-2*({progress})))"
+    )
 
 
 def reframe_enabled() -> bool:

@@ -45,8 +45,22 @@ class Settings(BaseSettings):
     PEXELS_API_KEY: str = ""
     PIXABAY_API_KEY: str = ""
 
-    # Transcription provider
+    # Transcription. `auto` uses the hosted Whisper API when
+    # TRANSCRIPTION_API_KEY is set and local Whisper otherwise, so the app
+    # transcribes for real out of the box with nothing to configure;
+    # `local` and `api` force one or the other.
+    TRANSCRIPTION_BACKEND: str = "auto"
     TRANSCRIPTION_API_KEY: str = ""
+    # Local Whisper (faster-whisper). `base` transcribes about 10x faster
+    # than realtime on a laptop CPU and is accurate enough to pick
+    # highlights and caption them; `small`/`medium` are better and slower.
+    # The model downloads once, on first use, into the HuggingFace cache.
+    WHISPER_MODEL: str = "base"
+    WHISPER_DEVICE: str = "auto"
+    WHISPER_COMPUTE_TYPE: str = "int8"
+    # Fixing the language skips detection and stops a quiet opening from
+    # being mistaken for another one. Empty means detect per video.
+    WHISPER_LANGUAGE: str = ""
 
     # Object storage (uploaded videos, generated clips, exports)
     STORAGE_BUCKET: str = ""

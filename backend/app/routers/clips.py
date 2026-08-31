@@ -81,7 +81,8 @@ async def update_clip(
     db: Session = Depends(get_db),
     current_user: Any = Depends(get_current_user),
 ) -> Clip:
-    """Partially update a clip's title, trim times, or caption text."""
+    """Partially update a clip: title, trim times, caption text, framing
+    mode, or caption style."""
 
     clip = clip_service.get_clip_owned(db, clip_id=clip_id, user_id=current_user.id)
     return clip_service.update_clip(db, clip, payload)

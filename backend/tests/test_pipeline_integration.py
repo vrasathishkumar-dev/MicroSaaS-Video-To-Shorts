@@ -31,11 +31,12 @@ import shutil
 import subprocess
 import threading
 from pathlib import Path
+from unittest.mock import AsyncMock
 
 import pytest
 from fastapi.testclient import TestClient
 
-from app.config import settings
+import app.routers.videos as video_router_module
 
 pytestmark = pytest.mark.skipif(
     shutil.which("ffmpeg") is None, reason="ffmpeg binary not available"
@@ -93,6 +94,77 @@ def source_http_server(tmp_path):  # type: ignore[no-untyped-def]
         thread.join(timeout=5)
 
 
+#: What a few minutes of someone actually talking looks like. Timed to
+#: cover the synthetic source's 300 seconds, with a clear hook part-way in
+#: so highlight detection has a right answer to find.
+SPOKEN_TRANSCRIPT: list[dict] = [
+    {
+        "start_time": 0.0,
+        "end_time": 6.0,
+        "text": "Hi everybody, thank you, thank you so much.",
+    },
+    {
+        "start_time": 6.0,
+        "end_time": 14.0,
+        "text": "Welcome back to the show, please welcome our guest.",
+    },
+    {
+        "start_time": 14.0,
+        "end_time": 30.0,
+        "text": "So we were talking backstage about the weather and the traffic.",
+    },
+    {
+        "start_time": 30.0,
+        "end_time": 38.0,
+        "text": "Here's the thing nobody tells you about starting out.",
+    },
+    {
+        "start_time": 38.0,
+        "end_time": 52.0,
+        "text": (
+            "I never realized the biggest mistake was trying to sound like "
+            "everyone else."
+        ),
+    },
+    {
+        "start_time": 52.0,
+        "end_time": 70.0,
+        "text": (
+            "The truth is the first three years I spent copying people I "
+            "admired, and it cost me."
+        ),
+    },
+    {
+        "start_time": 70.0,
+        "end_time": 95.0,
+        "text": (
+            "What changed everything was realizing an audience can tell when "
+            "you mean it."
+        ),
+    },
+    {
+        "start_time": 95.0,
+        "end_time": 140.0,
+        "text": "Anyway, that is roughly how it went for me.",
+    },
+    {
+        "start_time": 140.0,
+        "end_time": 200.0,
+        "text": "And then we moved to a different city for a while.",
+    },
+    {
+        "start_time": 200.0,
+        "end_time": 260.0,
+        "text": "Which is a whole other story for another time.",
+    },
+    {
+        "start_time": 260.0,
+        "end_time": 300.0,
+        "text": "Thanks so much for having me, this was fun.",
+    },
+]
+
+
 def test_url_to_9x16_short_end_to_end(
     client: TestClient,
     auth_headers: dict[str, str],
@@ -110,8 +182,16 @@ def test_url_to_9x16_short_end_to_end(
     import app.services.storage as storage_module
 
     monkeypatch.setattr(storage_module, "_assert_public_http_url", lambda url: None)
-    # Exercise the real fallback-transcript path (no paid Whisper call in tests).
-    monkeypatch.setattr(settings, "TRANSCRIPTION_API_KEY", "")
+    # The synthetic source is a colour card with silent audio: real
+    # transcription (correctly) finds no speech in it, and running Whisper
+    # in the suite would cost a model download and minutes per run. The
+    # transcript is stubbed here so the *pipeline* is what's under test --
+    # transcription has its own coverage in test_transcription.py.
+    monkeypatch.setattr(
+        video_router_module,
+        "transcribe_video",
+        AsyncMock(return_value=SPOKEN_TRANSCRIPT),
+    )
 
     # 1. Submit the video URL.
     create_resp = client.post(

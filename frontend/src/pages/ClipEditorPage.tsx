@@ -23,6 +23,7 @@ import { TrimControls } from '@/components/clips/TrimControls';
 import { ViralityScoreBadge } from '@/components/clips/ViralityScoreBadge';
 import { GlassCard } from '@/components/ui/GlassCard';
 import { PageWrapper } from '@/components/ui/PageWrapper';
+import { CAPTION_PREVIEW_STYLES, activeCaptionFrame } from '@/lib/captions';
 import {
   activeSpeakerWindow,
   activeSplitSection,
@@ -32,10 +33,12 @@ import { computeViralityInsights } from '@/lib/virality';
 import { cn } from '@/lib/utils';
 import {
   getClip,
+  getClipCaptions,
   getClipFraming,
   getClipPreviewUrl,
   updateClip,
 } from '@/services/clipService';
+import type { UpdateClipPayload } from '@/services/clipService';
 import { getClipBrollAssets } from '@/services/brollService';
 import { getTranscript } from '@/services/videoService';
 import {
@@ -45,13 +48,15 @@ import {
 } from '@/services/exportService';
 import type {
   BrollAsset,
+  CaptionFrame,
   CaptionStylePreset,
   Clip,
   ClipFraming,
+  FramingMode,
   TranscriptSegment,
 } from '@/types';
 
-export type FramingMode = 'speaker_focus' | 'dynamic_blur' | 'fit';
+export type { FramingMode };
 
 export function ClipEditorPage() {
   const { id } = useParams<{ id: string }>();
@@ -61,6 +66,7 @@ export function ClipEditorPage() {
   const [transcriptSegments, setTranscriptSegments] = useState<TranscriptSegment[]>([]);
   const [brollAssets, setBrollAssets] = useState<BrollAsset[]>([]);
   const [framing, setFraming] = useState<ClipFraming | null>(null);
+  const [captionEvents, setCaptionEvents] = useState<CaptionFrame[]>([]);
   const [framingMode, setFramingMode] = useState<FramingMode>('speaker_focus');
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -104,6 +110,9 @@ export function ClipEditorPage() {
     try {
       const data = await getClip(clipId);
       setClip(data);
+      // The studio opens on what this clip is actually set to render as.
+      setFramingMode(data.framing_mode ?? 'speaker_focus');
+      setCaptionPreset(data.caption_style ?? 'hormozi');
       if (data.video_project_id) {
         try {
           const segments = await getTranscript(data.video_project_id);
@@ -150,6 +159,50 @@ export function ClipEditorPage() {
       current = false;
     };
   }, [clipId, clipStart, clipEnd, clipStatus]);
+
+  // The captions the export will burn in. They come from the transcript
+  // unless the user wrote their own, which is why the preview can't build
+  // them from `caption_text` alone -- an untouched clip has none of that
+  // and still exports fully subtitled. Re-fetched when the trim moves or
+  // the style changes, since both change the timeline.
+  useEffect(() => {
+    if (!Number.isFinite(clipId) || clipStart === undefined) return;
+    let current = true;
+    getClipCaptions(clipId)
+      .then((data) => {
+        if (current) setCaptionEvents(data.events);
+      })
+      .catch(() => {
+        if (current) setCaptionEvents([]);
+      });
+    return () => {
+      current = false;
+    };
+  }, [clipId, clipStart, clipEnd, clipStatus, captionPreset]);
+
+  /**
+   * Framing and caption style are render settings, not preview toggles:
+   * saving them is what makes the exported short match what the studio is
+   * showing. Applied locally first so the preview reacts immediately.
+   */
+  const saveRenderChoice = async (payload: UpdateClipPayload) => {
+    if (!clip) return;
+    try {
+      setClip(await updateClip(clip.id, payload));
+    } catch {
+      setError('Could not save that choice — the export may use the previous one.');
+    }
+  };
+
+  const handleFramingModeChange = (mode: FramingMode) => {
+    setFramingMode(mode);
+    void saveRenderChoice({ framing_mode: mode });
+  };
+
+  const handleCaptionPresetChange = (preset: CaptionStylePreset) => {
+    setCaptionPreset(preset);
+    void saveRenderChoice({ caption_style: preset });
+  };
 
   const handleTrimSave = async (startTime: number, endTime: number) => {
     if (!clip) return;
@@ -302,6 +355,9 @@ export function ClipEditorPage() {
     ? speakerFocusStyle(splitSection.panes[1] ?? splitSection.panes[0])
     : undefined;
 
+  const activeCaption = activeCaptionFrame(captionEvents, relativeTime);
+  const captionStyle = CAPTION_PREVIEW_STYLES[captionPreset];
+
   /** Keep the bottom pane on the same frame as the one being played. */
   const syncSecondPane = (time: number, playing: boolean) => {
     const pane = secondPaneRef.current;
@@ -373,7 +429,7 @@ export function ClipEditorPage() {
           <div className="flex items-center gap-1.5 p-1 mb-3 rounded-full bg-muted/60 border border-glass-border text-[11px] font-medium">
             <button
               type="button"
-              onClick={() => setFramingMode('speaker_focus')}
+              onClick={() => handleFramingModeChange('speaker_focus')}
               className={cn(
                 'flex items-center gap-1 px-3 py-1 rounded-full transition-all',
                 framingMode === 'speaker_focus'
@@ -386,7 +442,7 @@ export function ClipEditorPage() {
             </button>
             <button
               type="button"
-              onClick={() => setFramingMode('dynamic_blur')}
+              onClick={() => handleFramingModeChange('dynamic_blur')}
               className={cn(
                 'flex items-center gap-1 px-3 py-1 rounded-full transition-all',
                 framingMode === 'dynamic_blur'
@@ -399,7 +455,7 @@ export function ClipEditorPage() {
             </button>
             <button
               type="button"
-              onClick={() => setFramingMode('fit')}
+              onClick={() => handleFramingModeChange('fit')}
               className={cn(
                 'flex items-center gap-1 px-3 py-1 rounded-full transition-all',
                 framingMode === 'fit'
@@ -445,7 +501,7 @@ export function ClipEditorPage() {
                   )}
                 >
                   <div
-                    className="relative overflow-hidden transition-all duration-300"
+                    className="relative overflow-hidden"
                     style={{ height: splitSection ? '50%' : '100%' }}
                   >
                     <video
@@ -455,7 +511,6 @@ export function ClipEditorPage() {
                       playsInline
                       style={topPaneStyle}
                       className={cn(
-                        'transition-all duration-500',
                         topPaneStyle
                           ? 'object-cover'
                           : framingMode === 'speaker_focus'
@@ -491,7 +546,7 @@ export function ClipEditorPage() {
                   {/* Loaded only for a clip that actually has a split, so
                       a single-speaker preview streams the source once. */}
                   <div
-                    className="relative overflow-hidden transition-all duration-300"
+                    className="relative overflow-hidden"
                     style={{ height: splitSection ? '50%' : '0%' }}
                   >
                     {hasSplitScreen && (
@@ -502,7 +557,7 @@ export function ClipEditorPage() {
                         muted
                         preload="auto"
                         style={bottomPaneStyle}
-                        className="object-cover transition-all duration-500"
+                        className="object-cover"
                       />
                     )}
                   </div>
@@ -526,38 +581,28 @@ export function ClipEditorPage() {
                   </div>
                 )}
 
-                {/* Subtitle Simulation Overlay with Word Highlight */}
-                {clip.caption_text && (
+                {/* Subtitles, as the export will burn them in: the
+                    renderer's own timeline, this clip's chosen preset, and
+                    the word it lights up. */}
+                {activeCaption && (
                   <div className="absolute inset-x-4 bottom-14 z-20 pointer-events-none text-center">
                     <span
                       className={cn(
-                        'inline-block px-3 py-1.5 rounded-lg text-xs leading-tight transition-all',
-                        captionPreset === 'hormozi'
-                          ? 'bg-black/90 text-yellow-300 font-black uppercase tracking-wider border-2 border-lime-400 shadow-lg'
-                          : captionPreset === 'neon'
-                            ? 'bg-black/80 text-cyan-300 font-extrabold tracking-wide border border-cyan-400 shadow-[0_0_12px_rgba(34,211,238,0.7)]'
-                            : captionPreset === 'karaoke'
-                              ? 'bg-black/70 text-emerald-300 font-extrabold uppercase border-b-2 border-emerald-400'
-                              : captionPreset === 'bold_box'
-                                ? 'bg-black/80 text-white font-bold'
-                                : 'text-white font-semibold drop-shadow-[0_2px_4px_rgba(0,0,0,0.9)]',
+                        'inline-block px-3 py-1.5 rounded-lg text-xs leading-tight',
+                        captionStyle.block,
                       )}
                     >
-                      {activeBroll ? (
-                        <span>
-                          {clip.caption_text.split(new RegExp(`(${activeBroll.keyword})`, 'gi')).map((part, idx) =>
-                            part.toLowerCase() === activeBroll.keyword.toLowerCase() ? (
-                              <span key={idx} className="text-lime-300 bg-lime-500/30 px-1 rounded underline">
-                                {part}
-                              </span>
-                            ) : (
-                              part
-                            )
+                      {activeCaption.text.split(/\s+/).map((word, index) => (
+                        <span
+                          key={`${index}-${word}`}
+                          className={cn(
+                            index === activeCaption.active_word &&
+                              captionStyle.activeWord,
                           )}
+                        >
+                          {word}{' '}
                         </span>
-                      ) : (
-                        clip.caption_text
-                      )}
+                      ))}
                     </span>
                   </div>
                 )}
@@ -633,7 +678,7 @@ export function ClipEditorPage() {
               <GlassCard className="space-y-4">
                 <CaptionStyleSelector
                   selectedPreset={captionPreset}
-                  onSelect={setCaptionPreset}
+                  onSelect={handleCaptionPresetChange}
                 />
               </GlassCard>
 

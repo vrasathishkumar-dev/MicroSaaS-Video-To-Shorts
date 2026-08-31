@@ -140,6 +140,94 @@ class TestCreateUrl:
         assert get_resp.json()["error_message"]
 
 
+class TestSubmissionOptions:
+    """The submit form's AI options. They are settings for the shorts, not
+    UI decoration: what gets picked here has to survive to the clips."""
+
+    def test_options_are_saved_with_the_project(
+        self, client: TestClient, auth_headers: dict[str, str]
+    ) -> None:
+        with (
+            patch(
+                "app.routers.videos.storage.download_from_url",
+                new=AsyncMock(return_value="videos/downloaded.mp4"),
+            ),
+            patch(
+                "app.routers.videos.transcribe_video",
+                new=AsyncMock(return_value=FAKE_SEGMENTS),
+            ),
+        ):
+            response = client.post(
+                "/api/v1/videos",
+                data={
+                    "title": "Configured Video",
+                    "source_type": "url",
+                    "source_url": "https://example.com/video.mp4",
+                    "target_clip_length": "fast",
+                    "framing_mode": "dynamic_blur",
+                    "caption_style": "karaoke",
+                    "auto_broll": "false",
+                },
+                headers=auth_headers,
+            )
+
+        assert response.status_code == 201
+        body = response.json()
+        assert body["target_clip_length"] == "fast"
+        assert body["framing_mode"] == "dynamic_blur"
+        assert body["caption_style"] == "karaoke"
+        assert body["auto_broll"] is False
+
+    def test_a_bare_submission_still_works(
+        self, client: TestClient, auth_headers: dict[str, str]
+    ) -> None:
+        """The options panel is collapsed by default, so a submission that
+        sends none of them has to land on sensible defaults."""
+
+        with (
+            patch(
+                "app.routers.videos.storage.download_from_url",
+                new=AsyncMock(return_value="videos/downloaded.mp4"),
+            ),
+            patch(
+                "app.routers.videos.transcribe_video",
+                new=AsyncMock(return_value=FAKE_SEGMENTS),
+            ),
+        ):
+            response = client.post(
+                "/api/v1/videos",
+                data={
+                    "title": "Plain Video",
+                    "source_type": "url",
+                    "source_url": "https://example.com/video.mp4",
+                },
+                headers=auth_headers,
+            )
+
+        assert response.status_code == 201
+        body = response.json()
+        assert body["target_clip_length"] == "auto"
+        assert body["framing_mode"] == "speaker_focus"
+        assert body["caption_style"] == "hormozi"
+        assert body["auto_broll"] is True
+
+    def test_an_unknown_option_is_rejected(
+        self, client: TestClient, auth_headers: dict[str, str]
+    ) -> None:
+        response = client.post(
+            "/api/v1/videos",
+            data={
+                "title": "Bad Video",
+                "source_type": "url",
+                "source_url": "https://example.com/video.mp4",
+                "target_clip_length": "epic",
+            },
+            headers=auth_headers,
+        )
+
+        assert response.status_code == 422
+
+
 class TestListAndGet:
     def test_list_video_projects_pagination(
         self, client: TestClient, auth_headers: dict[str, str]
