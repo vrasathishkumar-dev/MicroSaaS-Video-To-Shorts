@@ -18,24 +18,39 @@ from app.models.broll_asset import BrollAsset
 from app.models.clip import Clip
 from app.models.user import User
 from app.models.video_project import SourceType, VideoProject, VideoProjectStatus
-from app.services.broll_sourcing import extract_keywords, search_pexels, search_pixabay
+from app.services.broll_sourcing import (
+    _rank_score,
+    _relevance,
+    extract_keywords,
+    extract_search_phrase,
+    search_pexels,
+    search_pixabay,
+)
 
-PEXELS_RESULTS = [
-    {
-        "source": "pexels",
-        "source_asset_id": "111",
-        "asset_url": "https://pexels.example/111.mp4",
+
+def _result(source: str, asset_id: str, **overrides: object) -> dict:
+    """A fully-populated normalized search result, as the service now emits."""
+
+    result = {
+        "source": source,
+        "source_asset_id": asset_id,
+        "asset_url": f"https://{source}.example/{asset_id}.mp4",
+        "preview_url": f"https://{source}.example/{asset_id}-tiny.mp4",
+        "thumbnail_url": f"https://{source}.example/{asset_id}.jpg",
+        "provider_url": f"https://{source}.example/video/{asset_id}",
+        "author": "A Photographer",
+        "description": "a mountain range at sunrise",
+        "width": 1080,
+        "height": 1920,
+        "duration": 12.0,
         "keyword": "mountains",
     }
-]
-PIXABAY_RESULTS = [
-    {
-        "source": "pixabay",
-        "source_asset_id": "222",
-        "asset_url": "https://pixabay.example/222.mp4",
-        "keyword": "mountains",
-    }
-]
+    result.update(overrides)
+    return result
+
+
+PEXELS_RESULTS = [_result("pexels", "111")]
+PIXABAY_RESULTS = [_result("pixabay", "222")]
 
 
 def _make_clip(
@@ -139,9 +154,13 @@ class TestAutoInsert:
     ) -> None:
         clip = _make_clip(db_session, test_user)
 
+        # One distinct stock clip per keyword: auto-source never repeats an
+        # asset within a single short, so a shared pool of three is what it
+        # takes to fill all three keyword windows.
+        pool = [_result("pexels", "111"), _result("pexels", "112"), _result("pexels", "113")]
         with patch(
             "app.services.broll_sourcing._search_all_providers",
-            new=AsyncMock(return_value=[*PEXELS_RESULTS]),
+            new=AsyncMock(return_value=pool),
         ):
             response = client.post(
                 f"/api/v1/clips/{clip.id}/broll/auto", headers=auth_headers
@@ -150,10 +169,11 @@ class TestAutoInsert:
         assert response.status_code == 200
         created = response.json()
         # caption_text "mountains hiking adventure" yields 3 keywords, each
-        # of which resolves to the (mocked) top result.
+        # of which resolves to a distinct (mocked) result.
         assert len(created) == 3
         assert all(item["clip_id"] == clip.id for item in created)
         assert all(item["source"] == "pexels" for item in created)
+        assert len({item["source_asset_id"] for item in created}) == 3
 
         db_assets = db_session.query(BrollAsset).filter(BrollAsset.clip_id == clip.id).all()
         assert len(db_assets) == 3
@@ -247,6 +267,23 @@ class TestManualInsertAndDelete:
         assert body["keyword"] == "forest"
         assert body["clip_id"] == clip.id
 
+    def test_manual_insert_rejects_non_positive_window(
+        self, client: TestClient, auth_headers: dict[str, str], db_session: Session, test_user
+    ) -> None:
+        clip = _make_clip(db_session, test_user)
+        payload = {
+            "source": "pexels",
+            "source_asset_id": "999",
+            "asset_url": "https://pexels.example/999.mp4",
+            "keyword": "forest",
+            "position_start": 4.0,
+            "position_end": 4.0,
+        }
+        response = client.post(
+            f"/api/v1/clips/{clip.id}/broll", json=payload, headers=auth_headers
+        )
+        assert response.status_code == 422
+
     def test_manual_insert_other_users_clip_404(
         self,
         client: TestClient,
@@ -330,22 +367,75 @@ class TestSearchPexelsService:
     @pytest.mark.asyncio
     async def test_parses_normalized_results(self, monkeypatch: pytest.MonkeyPatch) -> None:
         fake_response = _FakeResponse(
-            {"videos": [{"id": 55, "video_files": [{"link": "https://cdn.example/x.mp4"}]}]}
+            {
+                "videos": [
+                    {
+                        "id": 55,
+                        "url": "https://www.pexels.com/video/dogs-55/",
+                        "image": "https://cdn.example/x.jpg",
+                        "duration": 12,
+                        "user": {"name": "A Photographer"},
+                        "video_files": [
+                            {"link": "https://cdn.example/x-hd.mp4", "width": 1080, "height": 1920},
+                            {"link": "https://cdn.example/x-sd.mp4", "width": 640, "height": 1138},
+                        ],
+                    }
+                ]
+            }
         )
 
         async def fake_get(self, url, **kwargs):  # noqa: ANN001, ANN002, ANN003
             return fake_response
 
         monkeypatch.setattr(httpx.AsyncClient, "get", fake_get)
-        results = await search_pexels("dogs")
+        results = await search_pexels("dogs", per_page=1)
         assert results == [
             {
                 "source": "pexels",
                 "source_asset_id": "55",
-                "asset_url": "https://cdn.example/x.mp4",
+                # Largest rendition within the export canvas renders...
+                "asset_url": "https://cdn.example/x-hd.mp4",
+                # ...while the small one backs the browser hover preview.
+                "preview_url": "https://cdn.example/x-sd.mp4",
+                "thumbnail_url": "https://cdn.example/x.jpg",
+                "provider_url": "https://www.pexels.com/video/dogs-55/",
+                "author": "A Photographer",
+                # Pexels leaves `tags` empty and puts the real description
+                # in the page URL, so the slug is what relevance ranks on.
+                "description": "dogs",
+                "width": 1080,
+                "height": 1920,
+                "duration": 12.0,
                 "keyword": "dogs",
             }
         ]
+
+    @pytest.mark.asyncio
+    async def test_skips_videos_with_no_downloadable_file(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A Pexels entry whose renditions are unusable must be dropped, not
+        backfilled with `video["url"]` -- that field is the Pexels *web page*,
+        so storing it as asset_url hands ffmpeg an HTML document at render
+        time and the B-roll silently never appears in the export."""
+
+        fake_response = _FakeResponse(
+            {
+                "videos": [
+                    {
+                        "id": 55,
+                        "url": "https://www.pexels.com/video/dogs-55/",
+                        "video_files": [],
+                    }
+                ]
+            }
+        )
+
+        async def fake_get(self, url, **kwargs):  # noqa: ANN001, ANN002, ANN003
+            return fake_response
+
+        monkeypatch.setattr(httpx.AsyncClient, "get", fake_get)
+        assert await search_pexels("dogs") == []
 
     @pytest.mark.asyncio
     async def test_returns_empty_list_on_http_error(
@@ -374,7 +464,35 @@ class TestSearchPixabayService:
     @pytest.mark.asyncio
     async def test_parses_normalized_results(self, monkeypatch: pytest.MonkeyPatch) -> None:
         fake_response = _FakeResponse(
-            {"hits": [{"id": 77, "videos": {"medium": {"url": "https://cdn.example/y.mp4"}}}]}
+            {
+                "hits": [
+                    {
+                        "id": 77,
+                        "pageURL": "https://pixabay.com/videos/id-77/",
+                        "tags": "cats, kitten, pet",
+                        "duration": 20,
+                        "user": "A Videographer",
+                        "videos": {
+                            # Pixabay returns an entry for every size but
+                            # leaves `url` empty for ones it hasn't
+                            # rendered; "large" here must be skipped rather
+                            # than stored as an empty asset_url.
+                            "large": {"url": "", "width": 0, "height": 0},
+                            "medium": {
+                                "url": "https://cdn.example/y.mp4",
+                                "thumbnail": "https://cdn.example/y.jpg",
+                                "width": 1080,
+                                "height": 1920,
+                            },
+                            "tiny": {
+                                "url": "https://cdn.example/y-tiny.mp4",
+                                "width": 360,
+                                "height": 640,
+                            },
+                        },
+                    }
+                ]
+            }
         )
 
         async def fake_get(self, url, **kwargs):  # noqa: ANN001, ANN002, ANN003
@@ -387,6 +505,14 @@ class TestSearchPixabayService:
                 "source": "pixabay",
                 "source_asset_id": "77",
                 "asset_url": "https://cdn.example/y.mp4",
+                "preview_url": "https://cdn.example/y-tiny.mp4",
+                "thumbnail_url": "https://cdn.example/y.jpg",
+                "provider_url": "https://pixabay.com/videos/id-77/",
+                "author": "A Videographer",
+                "description": "cats, kitten, pet",
+                "width": 1080,
+                "height": 1920,
+                "duration": 20.0,
                 "keyword": "cats",
             }
         ]
@@ -429,3 +555,82 @@ class TestExtractKeywords:
 
     def test_only_stopwords_returns_empty_list(self) -> None:
         assert extract_keywords("the and but for") == []
+
+
+class TestSearchPhrases:
+    """Stock libraries index scenes, not vocabulary, so the query sent to a
+    provider has to name something filmable."""
+
+    def test_builds_a_noun_phrase_from_a_spoken_sentence(self) -> None:
+        assert (
+            extract_search_phrase("that the espresso machine really matters a lot")
+            == "espresso machine"
+        )
+        assert (
+            extract_search_phrase("we went to the mountain trail last weekend")
+            == "mountain trail"
+        )
+
+    def test_adverbs_never_become_a_query(self) -> None:
+        """Regression: ranking broke ties by word length, so long adverbs
+        beat the concrete nouns beside them and the query became
+        "absolutely incredible" -- which matches no stock footage."""
+
+        phrase = extract_search_phrase(
+            "the sunrise over the canyon was absolutely incredible"
+        )
+        assert "absolutely" not in phrase
+        assert "incredible" not in phrase
+        assert phrase == "sunrise canyon"
+
+    def test_a_real_ly_noun_survives(self) -> None:
+        assert "family" in extract_search_phrase("the whole family gathered outside")
+
+    def test_prefers_the_noun_pair_over_the_verb_pair(self) -> None:
+        """Both "surgeon walked" and "operating room" are adjacent pairs
+        here; only the second names something to point a camera at."""
+
+        assert (
+            extract_search_phrase("the surgeon walked into the operating room")
+            == "operating room"
+        )
+
+    def test_falls_back_to_nothing_when_there_is_nothing_visual(self) -> None:
+        assert extract_search_phrase("well I mean you know basically") == ""
+
+
+class TestRelevanceRanking:
+    """Providers rank by their own popularity signals, not by fit."""
+
+    def test_scores_overlap_with_the_clip_description(self) -> None:
+        assert _relevance("espresso machine", "an espresso machine in a cafe") == 1.0
+        assert _relevance("espresso machine", "a coffee cup on a table") == 0.0
+        assert _relevance("espresso machine", "a machine in a workshop") == 0.5
+
+    def test_missing_description_is_not_punished(self) -> None:
+        """A provider that returns no description should fall back to the
+        other signals, not be ranked below an irrelevant clip."""
+
+        assert _relevance("espresso machine", "") == 0.0
+
+    def test_the_relevant_clip_outranks_the_merely_vertical_one(self) -> None:
+        relevant_landscape = _result(
+            "pixabay", "1", description="an espresso machine pouring coffee",
+            width=1920, height=1080, keyword="espresso machine",
+        )
+        irrelevant_portrait = _result(
+            "pexels", "2", description="a dog running on a beach",
+            width=1080, height=1920, keyword="espresso machine",
+        )
+        assert _rank_score(relevant_landscape) > _rank_score(irrelevant_portrait)
+
+    def test_between_two_relevant_clips_the_vertical_one_wins(self) -> None:
+        portrait = _result(
+            "pexels", "1", description="an espresso machine",
+            width=1080, height=1920, keyword="espresso machine",
+        )
+        landscape = _result(
+            "pixabay", "2", description="an espresso machine",
+            width=1920, height=1080, keyword="espresso machine",
+        )
+        assert _rank_score(portrait) > _rank_score(landscape)

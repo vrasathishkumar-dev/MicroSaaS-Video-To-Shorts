@@ -61,6 +61,33 @@ def _make_test_source_video(path: Path, duration: float = 3.0) -> None:
     )
 
 
+def _make_silent_source_video(path: Path, duration: float = 3.0) -> None:
+    """Synthesize a tiny real MP4 with a video stream and NO audio stream.
+
+    Every other fixture here muxes in silent audio, which is what let a
+    hard failure on genuinely audio-less sources (screen recordings,
+    exported timelines, GIF-derived MP4s) go unnoticed.
+    """
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    subprocess.run(
+        [
+            "ffmpeg",
+            "-y",
+            "-f",
+            "lavfi",
+            "-i",
+            f"color=c=blue:s=640x360:d={duration}",
+            "-an",
+            "-c:v",
+            "libx264",
+            str(path),
+        ],
+        check=True,
+        capture_output=True,
+    )
+
+
 def _probe_stream(path: Path, stream: str, entries: str) -> dict[str, str]:
     """Return the requested ffprobe stream entries as a dict."""
 
@@ -872,3 +899,99 @@ class TestEditorChoicesReachTheExport:
         assert _yellowest_caption_pixel(Path(minimal.video_file_path)) < yellow, (
             "the minimal preset rendered the same colours as Hormozi"
         )
+
+
+@pytest.mark.skipif(
+    shutil.which("ffmpeg") is None, reason="ffmpeg binary not available"
+)
+class TestSourceWithNoAudio:
+    """A source carrying no audio stream must still export.
+
+    Mapping `[0:a]` on a silent source is a hard filtergraph error, not a
+    warning: ffmpeg refuses to build the graph, the export fails, and the
+    clip lands in `failed` -- so *every* feature of the export, split
+    screen included, disappears. `_encode` has always had a video-only
+    fallback, but it recognised the failure only by ffmpeg's older wording
+    ("does not contain any stream" / "Stream map"). ffmpeg 8+ fails a step
+    earlier, while binding the filtergraph, and says "Stream specifier
+    ':a' in filtergraph description ... matches no streams" -- which the
+    fallback did not match, so it never fired.
+    """
+
+    def test_missing_audio_is_recognised_across_ffmpeg_versions(self) -> None:
+        from app.services.video_render import _is_missing_audio_error
+
+        # ffmpeg 8/9: the filtergraph refuses to bind.
+        assert _is_missing_audio_error(
+            "[fc#0] Stream specifier ':a' in filtergraph description "
+            "[0:a]loudnorm=i=-14.0[s17] matches no streams.\n"
+            "Error binding filtergraph inputs/outputs: Invalid argument"
+        )
+        # ffmpeg <= 7: the stream map refuses instead.
+        assert _is_missing_audio_error("Stream map '0:a' matches no streams.")
+        assert _is_missing_audio_error(
+            "Output file #0 does not contain any stream"
+        )
+        # An unrelated failure must still propagate.
+        assert not _is_missing_audio_error(
+            "Error while opening encoder - maybe incorrect parameters"
+        )
+
+    def test_audio_stream_is_detected(self, tmp_path: Path) -> None:
+        from app.services.video_render import _has_audio_stream
+
+        with_audio = tmp_path / "with_audio.mp4"
+        without_audio = tmp_path / "without_audio.mp4"
+        _make_test_source_video(with_audio)
+        _make_silent_source_video(without_audio)
+
+        assert _has_audio_stream(str(with_audio)) is True
+        assert _has_audio_stream(str(without_audio)) is False
+
+    def test_a_silent_source_still_exports(
+        self, db_session: Session, test_user: User
+    ) -> None:
+        import app.services.storage as storage_module
+
+        source_file = storage_module.UPLOAD_ROOT / "videos" / "silent.mp4"
+        _make_silent_source_video(source_file)
+
+        project = VideoProject(
+            user_id=test_user.id,
+            title="Silent project",
+            source_type=SourceType.upload,
+            status=VideoProjectStatus.ready,
+            source_file_path="videos/silent.mp4",
+        )
+        db_session.add(project)
+        db_session.commit()
+        db_session.refresh(project)
+
+        clip = Clip(
+            video_project_id=project.id,
+            user_id=test_user.id,
+            title="Clip",
+            start_time=0.0,
+            end_time=2.0,
+            order_index=0,
+            status=ClipStatus.rendering,
+        )
+        db_session.add(clip)
+        db_session.commit()
+        db_session.refresh(clip)
+
+        render_clip(clip.id)
+
+        db_session.refresh(clip)
+        assert clip.status == ClipStatus.ready, "a silent source failed the export"
+        assert clip.video_file_path
+        output_path = Path(clip.video_file_path)
+        assert output_path.is_file() and output_path.stat().st_size > 0
+
+        codecs = subprocess.run(
+            ["ffprobe", "-v", "error", "-show_entries", "stream=codec_type",
+             "-of", "csv=p=0", str(output_path)],
+            check=True, capture_output=True, text=True,
+        ).stdout.split()
+        assert "video" in codecs
+        assert "audio" not in codecs, "no audio to carry, so none should be written"

@@ -11,6 +11,19 @@ export interface BrollSearchResult {
   source_asset_id: string;
   asset_url: string;
   keyword: string;
+  /** Small rendition for hover preview — never stream `asset_url` in a grid. */
+  preview_url: string | null;
+  /** Poster still, shown until the tile is hovered. */
+  thumbnail_url: string | null;
+  /** What the clip depicts, per the provider — Pexels' URL slug or
+   *  Pixabay's tags. Ranked on, and shown as the tile's caption. */
+  description: string | null;
+  /** Provider page for the clip; both Pexels and Pixabay ask to be credited. */
+  provider_url: string | null;
+  author: string | null;
+  width: number | null;
+  height: number | null;
+  duration: number | null;
 }
 
 export interface InsertBrollPayload {

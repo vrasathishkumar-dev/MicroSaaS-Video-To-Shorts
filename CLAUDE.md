@@ -260,14 +260,41 @@ docs: update [documentation]
 
 ---
 
-## Agent Coordination
+## Agent Coordination — the virtual team
 
-For complex tasks, the ORCHESTRATOR coordinates:
-- DATABASE-AGENT → Backend models
-- BACKEND-AGENT → API development
-- FRONTEND-AGENT → UI components
-- TEST-AGENT → Testing
-- REVIEW-AGENT → Code review
-- DEVOPS-AGENT → Deployment
+VideoToShorts runs as a one-person company (see `AI Virtual Team
+Playbook.md`). The founder is the only human; every functional role is a
+Claude Code subagent defined in `.claude/agents/`, dispatched via the Agent
+tool by the main session, which acts as the orchestrator/founder liaison.
 
-Read agent definitions in `/agents/` folder.
+**Treat a new feature idea, requirement, or piece of feedback from the
+founder as the start of the pipeline** — not every message. Ordinary
+questions, direct instructions ("fix this", "run the tests"), and follow-ups
+on work already in flight are handled directly, same as any other session.
+
+Pipeline:
+```
+Idea/feedback → ba (backlog + story) → designer (spec) → backend-agent /
+frontend-agent / database-agent (build) → tester (QA) → devops (deploy)
+→ seo-geo + marketer (visibility & launch)
+```
+
+Roster (`.claude/agents/*.md`):
+- `ba` — Business Analyst: idea/feedback → prioritized backlog story
+- `designer` — UX/UI spec (no code)
+- `backend-agent` / `frontend-agent` / `database-agent` — implementation
+- `tester` — QA: test plan, execution, pass/fail (doesn't fix bugs)
+- `devops` — CI/CD, deploy, rollback plan
+- `seo-geo` — SEO (organic ranking) + GEO (AI-synthesized-answer visibility)
+  + AEO (direct question/answer surfaces: featured snippets, FAQ schema)
+- `marketer` — launch copy, campaign plan, channels
+
+**Shared knowledge base**: `team/backlog.md` — every role reads the story
+it's working on there and appends its own handoff subsection, so no role
+re-asks a prior role's questions.
+
+**Governance — two approval gates, everything else runs on:**
+1. After `ba` drafts a story (founder approves scope) — do not start
+   `designer`/build until approved.
+2. After `tester` signs off (founder approves release) — do not dispatch
+   `devops` until approved.

@@ -131,11 +131,24 @@ export function BrollPanel({ clipId }: BrollPanelProps) {
               key={asset.id}
               className="flex flex-col overflow-hidden rounded-xl border border-glass-border bg-background/40"
             >
-              <div className="relative h-20 w-full overflow-hidden bg-muted">
+              <div
+                className="relative h-20 w-full overflow-hidden bg-muted"
+                onMouseEnter={(event) => {
+                  const video = event.currentTarget.querySelector('video');
+                  void video?.play().catch(() => undefined);
+                }}
+                onMouseLeave={(event) => {
+                  const video = event.currentTarget.querySelector('video');
+                  video?.pause();
+                }}
+              >
+                {/* Only the first frame is fetched until the tile is
+                    hovered: `asset_url` is the full-resolution render
+                    file, and autoplaying one per attached asset makes the
+                    panel crawl. */}
                 <video
                   src={asset.asset_url}
                   muted
-                  autoPlay
                   loop
                   playsInline
                   preload="metadata"

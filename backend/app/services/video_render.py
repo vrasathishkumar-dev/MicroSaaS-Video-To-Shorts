@@ -898,7 +898,14 @@ def _apply_broll(
         if is_image:
             broll_input = ffmpeg.input(str(local_path), loop=1, t=window_duration)
         else:
-            broll_input = ffmpeg.input(str(local_path), t=window_duration)
+            # Stock clips are routinely shorter than the window they were
+            # placed in. Without the loop the overlay simply runs out and
+            # (via eof_action="pass") the cutaway vanishes mid-window,
+            # which looks like the B-roll failed rather than a deliberate
+            # cut; -t then trims the loop back to the window.
+            broll_input = ffmpeg.input(
+                str(local_path), stream_loop=-1, t=window_duration
+            )
 
         if fullscreen:
             overlay_stream = (
@@ -976,7 +983,7 @@ def _run_ffmpeg(
     video_stream = _apply_broll(video_stream, broll_assets, duration, tmp_dir)
     video_stream = _apply_captions(video_stream, captions, tmp_dir, caption_style)
 
-    _encode(video_stream, main_input, output_path)
+    _encode(video_stream, main_input, output_path, source_path)
 
 
 def _video_output_kwargs() -> dict[str, Any]:
@@ -1013,9 +1020,43 @@ def _audio_output_kwargs() -> dict[str, Any]:
     }
 
 
-def _encode(video_stream: Any, main_input: Any, output_path: Path) -> None:
+def _has_audio_stream(source_path: str) -> bool:
+    """Whether `source_path` carries an audio stream ffmpeg can map.
+
+    Asked up front because mapping `[0:a]` on a silent source is a *hard*
+    filtergraph error, not a warning: ffmpeg refuses to build the graph and
+    the whole export fails. Probing is the only version-proof way to know
+    -- the wording of that failure has changed across ffmpeg releases (see
+    `_encode`), so matching on stderr alone silently stops working when
+    ffmpeg is upgraded.
+
+    On a probe failure this returns True, which keeps the audio path (and
+    its stderr fallback) rather than silently dropping sound from a clip
+    that has it.
+    """
+
+    try:
+        probe = ffmpeg.probe(source_path)
+    except Exception as exc:
+        logger.warning("Could not probe %s for audio streams: %s", source_path, exc)
+        return True
+    return any(
+        stream.get("codec_type") == "audio" for stream in probe.get("streams", [])
+    )
+
+
+def _encode(
+    video_stream: Any, main_input: Any, output_path: Path, source_path: str
+) -> None:
     """Run the encode, falling back to a video-only output if the source
     has no audio track (rather than failing the whole render)."""
+
+    if not _has_audio_stream(source_path):
+        logger.info(
+            "render_clip: %s has no audio stream; encoding video-only", source_path
+        )
+        _encode_video_only(video_stream, output_path)
+        return
 
     audio_stream = main_input.audio
     if "loudnorm" in _available_filters():
@@ -1039,21 +1080,42 @@ def _encode(video_stream: Any, main_input: Any, output_path: Path) -> None:
         )
     except ffmpeg.Error as exc:
         stderr = exc.stderr.decode("utf-8", errors="replace") if exc.stderr else ""
-        if "does not contain any stream" in stderr or "Stream map" in stderr:
+        if _is_missing_audio_error(stderr):
             logger.warning(
                 "render_clip: source has no usable audio stream, encoding video-only"
             )
-            (
-                ffmpeg.output(
-                    video_stream,
-                    str(output_path),
-                    **_video_output_kwargs(),
-                )
-                .overwrite_output()
-                .run(capture_stdout=True, capture_stderr=True)
-            )
+            _encode_video_only(video_stream, output_path)
         else:
             raise
+
+
+# How ffmpeg reports a missing audio stream, which is worded differently
+# across releases: ffmpeg <= 7 fails at the stream map ("Stream map '0:a'
+# matches no streams" / "does not contain any stream"), while ffmpeg 8+
+# fails a step earlier, binding the filtergraph ("Stream specifier ':a' in
+# filtergraph description ... matches no streams"). Matching only the older
+# wording made a silent source fail the entire export on a modern build.
+_MISSING_AUDIO_MARKERS = (
+    "does not contain any stream",
+    "matches no streams",
+    "Stream map",
+)
+
+
+def _is_missing_audio_error(stderr: str) -> bool:
+    """Whether an ffmpeg failure was caused by the source having no audio."""
+
+    return any(marker in stderr for marker in _MISSING_AUDIO_MARKERS)
+
+
+def _encode_video_only(video_stream: Any, output_path: Path) -> None:
+    """Encode without an audio track."""
+
+    (
+        ffmpeg.output(video_stream, str(output_path), **_video_output_kwargs())
+        .overwrite_output()
+        .run(capture_stdout=True, capture_stderr=True)
+    )
 
 
 def _extract_thumbnail(video_path: Path, duration: float) -> Path | None:
