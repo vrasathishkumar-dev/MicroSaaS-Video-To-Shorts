@@ -32,6 +32,16 @@ _MAX_AUTO_TITLE_LEN = 60
 _SNAP_TOLERANCE_SECONDS = 2.5
 # Below this a snapped window is no longer a short; keep the unsnapped one.
 _MIN_SNAPPED_DURATION = 8.0
+# How much further than a ClipLength's own maximum a clip may stretch to
+# finish an in-progress sentence, before the edge is left wherever
+# _snap_to_speech put it instead. Sized to one trailing spoken sentence
+# (~15 words at a typical ~3 words/sec) -- enough to catch a sentence that
+# runs a beat past budget, not enough for a "fast" clip (30s max) to creep
+# toward "auto" territory (40s target).
+_SENTENCE_BOUNDARY_ALLOWANCE_SECONDS = 5.0
+# No generated clip may be longer than this, regardless of ClipLength or
+# how far away a sentence's terminal punctuation lands.
+_HARD_MAX_CLIP_DURATION = 60.0
 # A line shorter than this is a fragment, not a title; longer than the
 # maximum and it is a paragraph.
 _MIN_TITLE_WORDS = 5
@@ -175,6 +185,144 @@ def _snap_to_speech(
         # edges); the duration-based window was the better answer.
         return start, end
     return snapped_start, snapped_end
+
+
+def _extend_to_sentence_boundary(
+    start: float,
+    end: float,
+    segments: list[TranscriptSegment],
+    floor: float,
+    ceiling: float,
+    allowed_duration: float,
+) -> tuple[float, float]:
+    """Pull a clip's edges onto sentence-terminal boundaries (segment text
+    ending in `.`/`!`/`?`) when one is reachable, so a clip opens and closes
+    on a complete thought instead of wherever the duration budget or the
+    nearest speech pause happened to land.
+
+    Sentence completeness outranks the exact duration target, but only up
+    to `allowed_duration` (the ClipLength's own maximum plus a small,
+    bounded allowance -- see _SENTENCE_BOUNDARY_ALLOWANCE_SECONDS -- capped
+    at _HARD_MAX_CLIP_DURATION by the caller): `end` only ever moves
+    forward to the nearest terminal boundary at or after it, and `start`
+    only ever moves backward to the nearest terminal boundary at or before
+    it, both re-checked against `allowed_duration` using the other edge's
+    final value, so the resulting window's duration is bounded exactly.
+    `floor`/`ceiling` are the neighbouring clip's own finalized/raw edge
+    (never crossed), the same bounds `_pad_clusters`/`_snap_to_speech`
+    already use, so the non-overlap invariant still holds. If no boundary
+    is reachable within bounds, the edge is left exactly where it was
+    passed in (today's snapped-or-raw result).
+    """
+    # ponytail: extension is forward-only for `end` / backward-only for
+    # `start` -- if a sentence's terminal punctuation lands beyond
+    # `allowed_duration`, the edge stays mid-sentence rather than trimming
+    # back to an earlier complete sentence. Upgrade path: bounded trim-back
+    # toward `target` if this turns out to matter in practice.
+
+    ordered = sorted(segments, key=lambda s: s.start_time)
+
+    terminal_ends = [
+        seg.end_time for seg in ordered if seg.text.strip().endswith((".", "!", "?"))
+    ]
+    end_candidates = [
+        e for e in terminal_ends if end <= e <= ceiling and e - start <= allowed_duration
+    ]
+    new_end = min(end_candidates, default=end)
+
+    # A sentence starts at the transcript's very first segment, or right
+    # after any segment that ended in terminal punctuation.
+    terminal_starts = [
+        seg.start_time
+        for i, seg in enumerate(ordered)
+        if i == 0 or ordered[i - 1].text.strip().endswith((".", "!", "?"))
+    ]
+    start_candidates = [
+        s for s in terminal_starts if floor <= s <= start and new_end - s <= allowed_duration
+    ]
+    new_start = max(start_candidates, default=start)
+
+    return new_start, new_end
+
+
+def _clamp_start_to_boundary(
+    start_time: float,
+    end_time: float,
+    segments: list[TranscriptSegment],
+    floor: float,
+    allowed_duration: float,
+) -> float:
+    """Pull `start_time` forward to fit `allowed_duration`, without landing
+    mid-sentence (or mid-word) the way raw subtraction would.
+
+    Only reached when `_snap_to_speech` alone has already widened a window
+    past `allowed_duration` before `_extend_to_sentence_boundary` gets a
+    chance to help -- an `in_depth` clip has no allowance left to absorb
+    that (see `_SENTENCE_BOUNDARY_ALLOWANCE_SECONDS` /
+    `_HARD_MAX_CLIP_DURATION`). Searches forward from `end_time -
+    allowed_duration` for the nearest reachable boundary: a sentence-
+    terminal one first (a segment whose immediately preceding segment ends
+    in `.`/`!`/`?`, or the transcript's first segment), falling back to any
+    segment start if none exists in range. `end_time` -- the
+    sentence-terminal boundary `_extend_to_sentence_boundary` already
+    landed on -- is never moved.
+    """
+
+    min_start = end_time - allowed_duration
+    # A boundary within _MIN_SNAPPED_DURATION of end_time would produce a
+    # zero-length or near-empty clip -- not a valid candidate however
+    # "reachable" it is by position alone.
+    latest_start = end_time - _MIN_SNAPPED_DURATION
+    ordered = sorted(segments, key=lambda s: s.start_time)
+
+    sentence_starts = [
+        seg.start_time
+        for i, seg in enumerate(ordered)
+        if i == 0 or ordered[i - 1].text.strip().endswith((".", "!", "?"))
+    ]
+    reachable = [s for s in sentence_starts if min_start <= s <= latest_start and floor <= s]
+    if reachable:
+        return min(reachable)
+
+    segment_starts = [seg.start_time for seg in ordered]
+    reachable = [s for s in segment_starts if min_start <= s <= latest_start and floor <= s]
+    if reachable:
+        return min(reachable)
+
+    # ponytail: no boundary at all is reachable within allowed_duration (a
+    # single segment spans the whole window) -- fall back to the raw
+    # duration edge so the cap is never silently exceeded, rather than
+    # error or produce an empty clip. Upgrade path: bounded trim-back of
+    # `end_time` instead, if this shows up outside pathological fixtures.
+    return min_start
+
+
+def _fallback_title_source(
+    segments: list[TranscriptSegment],
+    start: float,
+    end: float,
+    anchor: TranscriptSegment,
+) -> str:
+    """Text to title a clip from when no sentence in the window fits
+    `_title_from_window`'s length filter.
+
+    Prefers the cluster's own anchor highlight, but only when the anchor
+    still falls inside the final (start, end) window -- a boundary clamp
+    downstream of clustering (`_clamp_start_to_boundary`) can push a
+    window's start past where the anchor sits, and titling a clip from a
+    highlight it no longer contains is misleading, not just untidy.
+    """
+
+    if start <= anchor.start_time and anchor.end_time <= end:
+        return anchor.text
+    in_window = [s for s in segments if start <= s.start_time and s.end_time <= end]
+    if in_window:
+        return in_window[0].text
+    # Anchor is outside the window and nothing else is fully inside it
+    # either -- titling from the anchor here would reproduce the exact bug
+    # this function exists to prevent, so degrade to "Untitled clip"
+    # (via _auto_title("")) instead.
+    return ""
 
 
 def _cluster_raw_segments(
@@ -321,6 +469,9 @@ def create_clips_from_highlights(
     )
 
     target, maximum = CLIP_LENGTH_TARGETS[project.target_clip_length]
+    allowed_duration = min(
+        maximum + _SENTENCE_BOUNDARY_ALLOWANCE_SECONDS, _HARD_MAX_CLIP_DURATION
+    )
     clusters = _cluster_raw_segments(highlight_segments)
     windows = _pad_clusters(clusters, 0.0, ceiling, target, maximum)
 
@@ -331,12 +482,28 @@ def create_clips_from_highlights(
         start_time, end_time = _snap_to_speech(
             start_time, end_time, all_segments, previous_end, next_start
         )
+        start_time, end_time = _extend_to_sentence_boundary(
+            start_time, end_time, all_segments, previous_end, next_start, allowed_duration
+        )
+        if end_time - start_time > allowed_duration:
+            # _snap_to_speech can widen a window by up to
+            # 2 * _SNAP_TOLERANCE_SECONDS on its own; for in_depth clips
+            # the hard cap leaves no allowance left to absorb that. Give up
+            # some of the opening rather than the sentence-terminal end
+            # _extend_to_sentence_boundary just earned -- but land the new
+            # opening on a boundary, not wherever raw subtraction falls.
+            start_time = _clamp_start_to_boundary(
+                start_time, end_time, all_segments, previous_end, allowed_duration
+            )
         previous_end = end_time
         clip = Clip(
             video_project_id=video_project_id,
             user_id=user_id,
             title=_title_from_window(
-                all_segments, start_time, end_time, anchor_segment.text
+                all_segments,
+                start_time,
+                end_time,
+                _fallback_title_source(all_segments, start_time, end_time, anchor_segment),
             ),
             start_time=round(start_time, 2),
             end_time=round(end_time, 2),

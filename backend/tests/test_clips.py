@@ -15,6 +15,13 @@ from app.models.video_project import (
     VideoProject,
     VideoProjectStatus,
 )
+from app.services.clip_service import (
+    _HARD_MAX_CLIP_DURATION,
+    _SENTENCE_BOUNDARY_ALLOWANCE_SECONDS,
+    CLIP_LENGTH_TARGETS,
+    _clamp_start_to_boundary,
+    _extend_to_sentence_boundary,
+)
 
 
 def _make_ready_project_with_highlights(
@@ -66,6 +73,163 @@ def _make_ready_project_with_highlights(
         t += 10.0
     db_session.commit()
     return project
+
+
+def _segment(start: float, end: float, text: str) -> TranscriptSegment:
+    """A bare (unpersisted) TranscriptSegment -- _extend_to_sentence_boundary
+    only reads attributes, so no db_session/project is needed for these
+    pure-function tests."""
+
+    return TranscriptSegment(
+        video_project_id=1, start_time=start, end_time=end, text=text
+    )
+
+
+class TestExtendToSentenceBoundary:
+    """Unit coverage for the sentence-boundary edge selection itself --
+    the pipeline-level tests below cover it wired into clip generation."""
+
+    def test_extends_past_the_raw_duration_edge_to_finish_the_sentence(self) -> None:
+        segments = [
+            _segment(0.0, 5.0, "Setup line that keeps talking"),
+            _segment(5.0, 9.0, "and finally reaches the point."),
+            _segment(9.0, 20.0, "Next unrelated sentence starts here."),
+        ]
+        # The raw duration edge (7.0) lands mid-way through the second
+        # segment; the sentence doesn't finish until 9.0.
+        start, end = _extend_to_sentence_boundary(
+            start=0.0,
+            end=7.0,
+            segments=segments,
+            floor=0.0,
+            ceiling=20.0,
+            allowed_duration=30.0,
+        )
+        assert (start, end) == (0.0, 9.0)
+
+    def test_extension_bounded_by_allowed_duration_leaves_edge_unchanged(self) -> None:
+        segments = [
+            _segment(0.0, 5.0, "Opening line."),
+            _segment(
+                5.0,
+                55.0,
+                "one continuous sentence that runs on and on until it ends.",
+            ),
+        ]
+        # The only terminal boundary (55.0) is far past what
+        # allowed_duration permits from this window -- must not reach for
+        # it, and must not shrink the window either.
+        start, end = _extend_to_sentence_boundary(
+            start=0.0,
+            end=20.0,
+            segments=segments,
+            floor=0.0,
+            ceiling=60.0,
+            allowed_duration=30.0,
+        )
+        assert (start, end) == (0.0, 20.0)
+
+    def test_never_crosses_the_neighbouring_clips_floor_or_ceiling(self) -> None:
+        segments = [
+            _segment(0.0, 10.0, "Sentence before the window."),
+            _segment(10.0, 20.0, "Sentence inside the window."),
+            _segment(20.0, 30.0, "Sentence after the window."),
+        ]
+        start, end = _extend_to_sentence_boundary(
+            start=10.0,
+            end=18.0,
+            segments=segments,
+            floor=10.0,
+            ceiling=20.0,
+            allowed_duration=30.0,
+        )
+        assert start >= 10.0
+        assert end <= 20.0
+
+    def test_no_terminal_punctuation_reachable_leaves_edges_unchanged(self) -> None:
+        segments = [
+            _segment(2.0, 10.0, "no punctuation at all here"),
+            _segment(10.0, 20.0, "still nothing terminal in this transcript"),
+        ]
+        start, end = _extend_to_sentence_boundary(
+            start=2.0,
+            end=15.0,
+            segments=segments,
+            floor=0.0,
+            ceiling=20.0,
+            allowed_duration=30.0,
+        )
+        assert (start, end) == (2.0, 15.0)
+
+
+class TestClampStartToBoundary:
+    """Unit coverage for the post-extend hard-cap clamp -- QA's regression
+    (start_time landing mid-segment via raw subtraction)."""
+
+    def test_lands_on_nearest_reachable_sentence_boundary_not_raw_subtraction(
+        self,
+    ) -> None:
+        # Ten contiguous 8s segments (0-80), each its own sentence -- the
+        # exact QA repro fixture. allowed_duration=60, end_time=72, so raw
+        # subtraction would give start_time=12.0 (mid-segment); the
+        # nearest reachable sentence-terminal start at/after 12.0 is 16.0.
+        segments = [
+            _segment(i * 8.0, i * 8.0 + 8.0, f"Highlight segment {i}.")
+            for i in range(10)
+        ]
+        start = _clamp_start_to_boundary(
+            start_time=8.0,
+            end_time=72.0,
+            segments=segments,
+            floor=0.0,
+            allowed_duration=60.0,
+        )
+        assert start == 16.0
+        assert 72.0 - start <= 60.0
+
+    def test_falls_back_to_a_plain_segment_start_when_no_sentence_boundary_in_range(
+        self,
+    ) -> None:
+        # No terminal punctuation anywhere -- every segment start is a
+        # plain boundary, not a sentence boundary, so the fallback tier
+        # must still land on a real segment edge rather than mid-segment.
+        segments = [
+            _segment(i * 8.0, i * 8.0 + 8.0, f"segment {i} with no punctuation")
+            for i in range(10)
+        ]
+        start = _clamp_start_to_boundary(
+            start_time=8.0,
+            end_time=72.0,
+            segments=segments,
+            floor=0.0,
+            allowed_duration=60.0,
+        )
+        assert start in {i * 8.0 for i in range(10)}
+        assert 72.0 - start <= 60.0
+
+    def test_never_returns_a_boundary_that_produces_a_near_empty_clip(self) -> None:
+        # end_time (80.0) is itself a segment start -- an admissible
+        # position by `min_start <= s <= end_time` alone, but picking it
+        # would produce a zero-length clip. With no other boundary
+        # reachable in [min_start, end_time - _MIN_SNAPPED_DURATION], the
+        # function must fall back to min_start rather than that
+        # zero-length boundary.
+        segments = [
+            _segment(0.0, 20.0, "Segment zero."),
+            _segment(20.0, 40.0, "Segment one."),
+            _segment(40.0, 60.0, "Segment two."),
+            _segment(60.0, 80.0, "Segment three."),
+            _segment(80.0, 100.0, "Segment four."),
+        ]
+        start = _clamp_start_to_boundary(
+            start_time=0.0,
+            end_time=80.0,
+            segments=segments,
+            floor=0.0,
+            allowed_duration=15.0,
+        )
+        assert start == 65.0
+        assert 80.0 - start == 15.0
 
 
 class TestGenerate:
@@ -205,6 +369,197 @@ class TestGenerate:
         for clip in clips:
             duration = clip["end_time"] - clip["start_time"]
             assert duration <= 50.0, f"clip exceeded MAX_CLIP_DURATION: {duration}s"
+        for earlier, later in zip(clips, clips[1:], strict=False):
+            assert earlier["end_time"] <= later["start_time"], "clips overlap"
+
+    def test_generate_extends_fast_clip_to_sentence_end_within_bounded_allowance(
+        self, client: TestClient, auth_headers: dict[str, str], db_session: Session, test_user
+    ) -> None:
+        """A "fast" clip whose sentence finishes a few seconds past both the
+        duration budget and the pause-snap should still land on the
+        sentence's end -- bounded by the allowance, not the raw edges."""
+
+        project = VideoProject(
+            user_id=test_user.id,
+            title="Fast project",
+            source_type=SourceType.upload,
+            status=VideoProjectStatus.ready,
+            target_clip_length=ClipLength.fast,
+        )
+        db_session.add(project)
+        db_session.commit()
+        db_session.refresh(project)
+
+        # 32s of continuous, open-ended speech (no terminal punctuation) --
+        # longer than fast's 30s maximum, so _pad_clusters trims it down to
+        # a 30s centered window that cuts off mid-sentence.
+        db_session.add(
+            TranscriptSegment(
+                video_project_id=project.id,
+                start_time=0.0,
+                end_time=32.0,
+                text="Highlight that keeps going without stopping for a while",
+                is_highlight=True,
+                highlight_score=0.9,
+            )
+        )
+        # The sentence actually finishes here, 2s past the trimmed window.
+        db_session.add(
+            TranscriptSegment(
+                video_project_id=project.id,
+                start_time=32.0,
+                end_time=34.0,
+                text="and that's the point.",
+                is_highlight=False,
+                highlight_score=0.1,
+            )
+        )
+        db_session.commit()
+
+        response = client.post(
+            "/api/v1/clips/generate",
+            json={"video_project_id": project.id},
+            headers=auth_headers,
+        )
+        assert response.status_code == 201
+        clip = response.json()[0]
+        duration = clip["end_time"] - clip["start_time"]
+
+        fast_maximum = CLIP_LENGTH_TARGETS[ClipLength.fast][1]
+        assert clip["end_time"] == 34.0
+        assert duration > fast_maximum, "did not extend to finish the sentence"
+        assert duration <= fast_maximum + _SENTENCE_BOUNDARY_ALLOWANCE_SECONDS
+        assert duration <= _HARD_MAX_CLIP_DURATION
+
+    def test_generate_never_exceeds_the_hard_60s_cap_even_after_snap_widens_it(
+        self, client: TestClient, auth_headers: dict[str, str], db_session: Session, test_user
+    ) -> None:
+        """_snap_to_speech can widen a window by up to
+        2 * _SNAP_TOLERANCE_SECONDS on its own. For "in_depth" clips the
+        bounded allowance is entirely absorbed by the 60s hard cap
+        (maximum is already 60), leaving no room to absorb that widening --
+        the pipeline must still bring the clip back under 60s."""
+
+        project = VideoProject(
+            user_id=test_user.id,
+            title="In-depth project",
+            source_type=SourceType.upload,
+            status=VideoProjectStatus.ready,
+            target_clip_length=ClipLength.in_depth,
+        )
+        db_session.add(project)
+        db_session.commit()
+        db_session.refresh(project)
+
+        # Ten adjacent 8s highlighted segments (0-80s) merge into one
+        # 80s cluster, longer than in_depth's 60s maximum -- centered
+        # trim lands on (10, 70), which _snap_to_speech then widens to
+        # (8, 72) via nearby segment boundaries.
+        for i in range(10):
+            db_session.add(
+                TranscriptSegment(
+                    video_project_id=project.id,
+                    start_time=i * 8.0,
+                    end_time=i * 8.0 + 8.0,
+                    text=f"Highlight segment {i}.",
+                    is_highlight=True,
+                    highlight_score=0.9,
+                )
+            )
+        db_session.add(
+            TranscriptSegment(
+                video_project_id=project.id,
+                start_time=80.0,
+                end_time=88.0,
+                text="Tail of the video.",
+                is_highlight=False,
+                highlight_score=0.1,
+            )
+        )
+        db_session.commit()
+
+        response = client.post(
+            "/api/v1/clips/generate",
+            json={"video_project_id": project.id},
+            headers=auth_headers,
+        )
+        assert response.status_code == 201
+        clip = response.json()[0]
+        duration = clip["end_time"] - clip["start_time"]
+        assert duration <= _HARD_MAX_CLIP_DURATION
+
+        # Regression coverage for the QA-reported bug: the clamp that
+        # enforces the hard cap must land start_time on a real boundary
+        # (here, a multiple of 8.0 -- every segment starts on one), not
+        # wherever raw `end_time - allowed_duration` subtraction falls
+        # (12.0, mid-segment). The nearest reachable sentence-terminal
+        # start at/after end_time - allowed_duration (72 - 60 = 12) is
+        # 16.0, giving a 56s clip.
+        assert clip["start_time"] == 16.0
+        assert clip["end_time"] == 72.0
+        assert duration == 56.0
+
+        # The clip's title must come from a segment inside the final
+        # window, not the anchor highlight ([0.0, 8.0]) that this clamp
+        # pushed outside of it -- _fallback_title_source falls back to the
+        # first in-window segment (starting at 16.0), unchanged by
+        # _auto_title since it's already short.
+        assert clip["title"] == "Highlight segment 2."
+
+    def test_generate_with_no_terminal_punctuation_still_produces_valid_clips(
+        self, client: TestClient, auth_headers: dict[str, str], db_session: Session, test_user
+    ) -> None:
+        """No sentence-terminal boundary anywhere in the transcript: the
+        fallback chain (sentence boundary -> snap-to-speech -> raw edges)
+        must still produce non-empty, non-overlapping clips rather than
+        erroring or degenerating."""
+
+        project = VideoProject(
+            user_id=test_user.id,
+            title="No punctuation project",
+            source_type=SourceType.upload,
+            status=VideoProjectStatus.ready,
+        )
+        db_session.add(project)
+        db_session.commit()
+        db_session.refresh(project)
+
+        t = 0.0
+        for i in range(2):
+            db_session.add(
+                TranscriptSegment(
+                    video_project_id=project.id,
+                    start_time=t,
+                    end_time=t + 45.0,
+                    text=f"highlight segment {i} without any punctuation",
+                    is_highlight=True,
+                    highlight_score=0.9,
+                )
+            )
+            t += 55.0
+        db_session.add(
+            TranscriptSegment(
+                video_project_id=project.id,
+                start_time=t,
+                end_time=t + 10.0,
+                text="plain segment without any punctuation",
+                is_highlight=False,
+                highlight_score=0.1,
+            )
+        )
+        db_session.commit()
+
+        response = client.post(
+            "/api/v1/clips/generate",
+            json={"video_project_id": project.id},
+            headers=auth_headers,
+        )
+        assert response.status_code == 201
+        clips = sorted(response.json(), key=lambda c: c["start_time"])
+
+        assert len(clips) == 2
+        for clip in clips:
+            assert clip["end_time"] > clip["start_time"], "empty or inverted clip"
         for earlier, later in zip(clips, clips[1:], strict=False):
             assert earlier["end_time"] <= later["start_time"], "clips overlap"
 
