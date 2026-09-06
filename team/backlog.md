@@ -22,6 +22,14 @@ founder approves it.)_
 
 ---
 
+## Active
+
+_(Approved stories move here as they move through Designer → Developer →
+Tester → DevOps → SEO/GEO/AEO → Marketer, each appending a subsection below the
+story.)_
+
+---
+
 ### Generated Shorts must start/end on a complete thought, not mid-sentence
 
 **Status:** deployed (2026-09-06)
@@ -602,10 +610,15 @@ on the remote is unchanged and CI has not run against this commit.
 **Rollback steps:**
 1. `git log --oneline -3` to confirm this fix's commit SHA is at `HEAD`
    (reported below).
-2. `git revert <this-commit-SHA>` — safe because this commit touches only
-   `backend/app/services/clip_service.py`, `backend/tests/test_clips.py`,
-   and `team/backlog.md`; nothing else is bundled in, so a revert can't drag
-   back or break unrelated files.
+2. Not a full `git revert <this-commit-SHA>` -- this commit's
+   `team/backlog.md` hunk also carries pre-existing, unrelated backlog
+   prose (other BA-drafted stories, plus this story's own
+   Implementation/QA/Fix/QA-re-verification history) that a revert would
+   delete along with the fix -- the same trap the prior B-roll DevOps note
+   flagged for 6bb3bef. Instead, revert only the code paths: restore
+   backend/app/services/clip_service.py and backend/tests/test_clips.py to
+   their state from the commit immediately before this fix, then commit
+   that (leaves team/backlog.md history intact).
 3. No `alembic downgrade` needed — no migration shipped.
 4. No feature flag exists for this change (none was added; it's unconditional
    logic inside `create_clips_from_highlights()`) — revert is the only
@@ -619,15 +632,6 @@ on the remote is unchanged and CI has not run against this commit.
 to existing output (no new user-facing surface, no new page/feature to
 announce), so likely low/no marketing action; flagging for their own call
 on whether it's worth a changelog/quality-improvement note.
-
-
----
-
-## Active
-
-_(Approved stories move here as they move through Designer → Developer →
-Tester → DevOps → SEO/GEO/AEO → Marketer, each appending a subsection below the
-story.)_
 
 ---
 
