@@ -16,9 +16,11 @@ from sqlalchemy.orm import Session
 
 from app.models.broll_asset import BrollAsset
 from app.models.clip import Clip
+from app.models.transcript_segment import TranscriptSegment
 from app.models.user import User
 from app.models.video_project import SourceType, VideoProject, VideoProjectStatus
 from app.services.broll_sourcing import (
+    _extract_keywords_with_timing,
     _rank_score,
     _relevance,
     extract_keywords,
@@ -233,6 +235,62 @@ class TestAutoInsert:
         response = client.post(f"/api/v1/clips/{clip.id}/broll/auto", headers=auth_headers)
         assert response.status_code == 200
         assert response.json() == []
+
+    def test_auto_source_replaces_previous_batch_instead_of_duplicating(
+        self, client: TestClient, auth_headers: dict[str, str], db_session: Session, test_user
+    ) -> None:
+        """Regression test: clicking "Auto-insert B-roll" a second time used
+        to insert another full batch on top of the first, since the
+        endpoint had no way to tell its own previous rows apart from
+        anything else attached to the clip."""
+
+        clip = _make_clip(db_session, test_user)
+        pool = [_result("pexels", "111"), _result("pexels", "112"), _result("pexels", "113")]
+
+        with patch(
+            "app.services.broll_sourcing._search_all_providers",
+            new=AsyncMock(return_value=pool),
+        ):
+            first = client.post(f"/api/v1/clips/{clip.id}/broll/auto", headers=auth_headers)
+            second = client.post(f"/api/v1/clips/{clip.id}/broll/auto", headers=auth_headers)
+
+        assert first.status_code == 200
+        assert second.status_code == 200
+        assert len(second.json()) == 3
+
+        db_assets = db_session.query(BrollAsset).filter(BrollAsset.clip_id == clip.id).all()
+        assert len(db_assets) == 3
+
+    def test_auto_source_does_not_remove_manually_inserted_broll(
+        self, client: TestClient, auth_headers: dict[str, str], db_session: Session, test_user
+    ) -> None:
+        clip = _make_clip(db_session, test_user)
+        manual_payload = {
+            "source": "pexels",
+            "source_asset_id": "999",
+            "asset_url": "https://pexels.example/999.mp4",
+            "keyword": "forest",
+            "position_start": 0.0,
+            "position_end": 2.0,
+        }
+        manual = client.post(
+            f"/api/v1/clips/{clip.id}/broll", json=manual_payload, headers=auth_headers
+        )
+        assert manual.status_code == 200
+        manual_id = manual.json()["id"]
+
+        pool = [_result("pexels", "111"), _result("pexels", "112"), _result("pexels", "113")]
+        with patch(
+            "app.services.broll_sourcing._search_all_providers",
+            new=AsyncMock(return_value=pool),
+        ):
+            client.post(f"/api/v1/clips/{clip.id}/broll/auto", headers=auth_headers)
+            client.post(f"/api/v1/clips/{clip.id}/broll/auto", headers=auth_headers)
+
+        db_assets = db_session.query(BrollAsset).filter(BrollAsset.clip_id == clip.id).all()
+        assert any(asset.id == manual_id for asset in db_assets)
+        # 3 auto-generated (replaced, not duplicated) + the 1 manual insert.
+        assert len(db_assets) == 4
 
     def test_auto_source_other_users_clip_404(
         self,
@@ -597,6 +655,105 @@ class TestSearchPhrases:
 
     def test_falls_back_to_nothing_when_there_is_nothing_visual(self) -> None:
         assert extract_search_phrase("well I mean you know basically") == ""
+
+
+class TestExtractKeywordsWithTiming:
+    """Regression coverage for full-clip B-roll coverage: a hard 3-keyword
+    cap and per-phrase dedup used to leave most of a clip -- everything
+    after the first ~8 seconds -- with no B-roll window at all."""
+
+    @staticmethod
+    def _clip_with_segments(
+        db_session: Session, user: User, segments: list[tuple[float, float, str]]
+    ) -> Clip:
+        project = VideoProject(
+            user_id=user.id,
+            title="Timing project",
+            source_type=SourceType.upload,
+            status=VideoProjectStatus.ready,
+        )
+        db_session.add(project)
+        db_session.commit()
+        db_session.refresh(project)
+
+        clip = Clip(
+            video_project_id=project.id,
+            user_id=user.id,
+            title="Clip",
+            start_time=0.0,
+            end_time=max(end for _, end, _ in segments),
+            order_index=0,
+        )
+        db_session.add(clip)
+        db_session.commit()
+        db_session.refresh(clip)
+
+        for start, end, text in segments:
+            db_session.add(
+                TranscriptSegment(
+                    video_project_id=project.id, start_time=start, end_time=end, text=text
+                )
+            )
+        db_session.commit()
+        db_session.refresh(clip)
+        return clip
+
+    def test_windows_cover_the_full_clip_back_to_back(
+        self, db_session: Session, test_user: User
+    ) -> None:
+        clip = self._clip_with_segments(
+            db_session,
+            test_user,
+            [
+                (1.0, 3.0, "the mountain trail was steep"),
+                (5.0, 7.0, "we reached the ocean shore"),
+                (7.0, 9.5, "the campfire glowed warm"),
+            ],
+        )
+
+        timings = _extract_keywords_with_timing(clip)
+
+        assert timings[0][1] == 0.0, "first window must start at clip time 0"
+        assert timings[-1][2] == clip.end_time, "last window must reach clip end"
+        for (_, _, end), (_, next_start, _) in zip(timings, timings[1:], strict=False):
+            assert end == next_start, "no gap is allowed between windows"
+
+    def test_more_than_three_spoken_segments_all_get_a_window(
+        self, db_session: Session, test_user: User
+    ) -> None:
+        """Regression: a hard cap of 3 used to mean a clip with more than
+        three spoken segments got B-roll only for its first few seconds."""
+
+        segments = [
+            (float(i * 2), float(i * 2 + 2), f"the sunrise over the canyon number {i}")
+            for i in range(6)
+        ]
+        clip = self._clip_with_segments(db_session, test_user, segments)
+
+        timings = _extract_keywords_with_timing(clip)
+
+        assert len(timings) == 6
+
+    def test_a_repeated_phrase_does_not_create_a_gap(
+        self, db_session: Session, test_user: User
+    ) -> None:
+        """Regression: dedup used to skip a segment outright when its
+        extracted phrase repeated an earlier one, leaving that stretch of
+        the clip with no B-roll window at all."""
+
+        clip = self._clip_with_segments(
+            db_session,
+            test_user,
+            [
+                (0.0, 2.0, "the mountain trail was steep"),
+                (2.0, 4.0, "the mountain trail kept climbing"),
+            ],
+        )
+
+        timings = _extract_keywords_with_timing(clip)
+
+        assert len(timings) == 2
+        assert timings[0][2] == timings[1][1] == 2.0
 
 
 class TestRelevanceRanking:

@@ -21,7 +21,7 @@ import pytest
 from sqlalchemy.orm import Session
 
 from app.models.broll_asset import BrollAsset, BrollSource
-from app.models.clip import Clip, ClipCaptionStyle, ClipFraming, ClipStatus
+from app.models.clip import BrollPlacement, Clip, ClipCaptionStyle, ClipFraming, ClipStatus
 from app.models.transcript_segment import TranscriptSegment
 from app.models.user import User
 from app.models.video_project import SourceType, VideoProject, VideoProjectStatus
@@ -405,6 +405,103 @@ class TestRenderClip:
         output_path = Path(clip.video_file_path)
         assert output_path.is_file()
         assert output_path.stat().st_size > 0
+
+    @pytest.mark.parametrize(
+        "placement",
+        [
+            BrollPlacement.bottom_right,
+            BrollPlacement.top,
+            BrollPlacement.bottom,
+            BrollPlacement.split,
+        ],
+    )
+    def test_render_composites_broll_at_every_placement(
+        self,
+        db_session: Session,
+        test_user: User,
+        broll_http_server,  # noqa: ANN001
+        placement: BrollPlacement,
+    ) -> None:
+        """Each BrollPlacement builds a valid ffmpeg filter graph and still
+        renders a spec-compliant 9:16 export -- this is what actually
+        catches a broken filter expression (e.g. the bottom_right PIP
+        card's runtime `main_h-overlay_h` positioning), which a pure Python
+        unit test of `_apply_broll` can't, since ffmpeg-python only
+        validates syntax when the graph is actually run."""
+
+        import app.services.storage as storage_module
+
+        server, serve_dir = broll_http_server
+        port = server.server_address[1]
+
+        source_file = storage_module.UPLOAD_ROOT / "videos" / f"source_{placement.value}.mp4"
+        _make_test_source_video(source_file, duration=6.0)
+        _make_test_source_video(serve_dir / f"broll_{placement.value}.mp4", duration=2.0)
+
+        project = VideoProject(
+            user_id=test_user.id,
+            title="Render with placement",
+            source_type=SourceType.upload,
+            status=VideoProjectStatus.ready,
+            source_file_path=f"videos/source_{placement.value}.mp4",
+        )
+        db_session.add(project)
+        db_session.commit()
+        db_session.refresh(project)
+
+        clip = Clip(
+            video_project_id=project.id,
+            user_id=test_user.id,
+            title="Clip",
+            start_time=0.0,
+            end_time=5.0,
+            order_index=0,
+            status=ClipStatus.rendering,
+            broll_placement=placement,
+        )
+        db_session.add(clip)
+        db_session.commit()
+        db_session.refresh(clip)
+
+        broll_asset = BrollAsset(
+            clip_id=clip.id,
+            source=BrollSource.pexels,
+            source_asset_id="1",
+            asset_url=f"http://127.0.0.1:{port}/broll_{placement.value}.mp4",
+            keyword="test",
+            position_start=0.0,
+            position_end=2.0,
+        )
+        db_session.add(broll_asset)
+        db_session.commit()
+
+        render_clip(clip.id)
+
+        db_session.refresh(clip)
+        assert clip.status == ClipStatus.ready, f"placement={placement.value} failed to render"
+        output_path = Path(clip.video_file_path)
+        assert output_path.is_file()
+        assert output_path.stat().st_size > 0
+
+        probe = subprocess.run(
+            [
+                "ffprobe",
+                "-v",
+                "error",
+                "-select_streams",
+                "v:0",
+                "-show_entries",
+                "stream=width,height",
+                "-of",
+                "csv=p=0",
+                str(output_path),
+            ],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        width, height = (int(v) for v in probe.stdout.strip().split(","))
+        assert (width, height) == (1080, 1920), "export is not 9:16"
 
     def test_render_matches_youtube_shorts_upload_spec(
         self, db_session: Session, test_user: User

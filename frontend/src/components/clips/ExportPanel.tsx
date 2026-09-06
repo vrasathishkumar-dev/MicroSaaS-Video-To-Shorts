@@ -107,8 +107,9 @@ export function ExportPanel({ clipId }: { clipId: number }) {
     setIsDownloading(true);
     try {
       await downloadClip(clipId);
-    } catch {
-      setErrorMessage('Failed to download the clip. Please try again.');
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : 'Failed to download the clip. Please try again.';
+      setErrorMessage(msg);
     } finally {
       setIsDownloading(false);
     }

@@ -9,6 +9,8 @@ path via `get_file_path()`.
 import asyncio
 import ipaddress
 import logging
+import re
+import shutil
 import socket
 import uuid
 from pathlib import Path
@@ -41,6 +43,11 @@ ALLOWED_VIDEO_CONTENT_TYPES = {
 }
 
 MAX_UPLOAD_SIZE_BYTES = 2 * 1024 * 1024 * 1024  # 2GB
+
+# A yt-dlp merge briefly needs a separate video file + audio file on disk
+# before combining them into one, so require double the max single-file size
+# as free space before even starting -- worst case, not the common case.
+_MIN_FREE_DISK_BYTES = 2 * MAX_UPLOAD_SIZE_BYTES
 _CHUNK_SIZE = 1024 * 1024  # 1MB, streamed to avoid buffering the whole file in memory
 
 _WEB_VIDEO_DOMAINS = (
@@ -56,6 +63,17 @@ _WEB_VIDEO_DOMAINS = (
     "twitter.com",
     "x.com",
 )
+
+
+# yt-dlp/ffmpeg subprocess errors can carry raw ANSI colour codes even with
+# `no_color` set (e.g. from a nested tool's own output) -- strip them before
+# any such message reaches a user-facing error, or it renders as literal
+# "[0;31m...[0m" noise instead of the actual reason.
+_ANSI_ESCAPE_RE = re.compile(r"\x1b\[[0-9;]*[a-zA-Z]")
+
+
+def _strip_ansi(text: str) -> str:
+    return _ANSI_ESCAPE_RE.sub("", text)
 
 
 def _is_web_video_url(url: str) -> bool:
@@ -75,6 +93,7 @@ def _download_via_ytdlp(url: str, target_dir: Path, filename_stem: str) -> Path:
         "outtmpl": outtmpl,
         "quiet": True,
         "no_warnings": True,
+        "no_color": True,
         "noplaylist": True,
         "max_filesize": MAX_UPLOAD_SIZE_BYTES,
         "socket_timeout": 30,
@@ -221,6 +240,17 @@ async def download_from_url(url: str, subdir: str) -> str:
     target_dir.mkdir(parents=True, exist_ok=True)
     file_id = uuid.uuid4().hex
 
+    # yt-dlp needs room for a separate video + audio file before merging them,
+    # on top of whatever else is on this disk -- a merge that runs out of
+    # space fails inside ffmpeg with an opaque "Conversion failed!", not a
+    # clear message, so check up front instead of letting that happen.
+    free_bytes = shutil.disk_usage(target_dir).free
+    if free_bytes < _MIN_FREE_DISK_BYTES:
+        raise ValidationAppError(
+            "Not enough disk space available to download this video "
+            f"(only {free_bytes // (1024 * 1024)}MB free)."
+        )
+
     if _is_web_video_url(url) and yt_dlp is not None:
         try:
             downloaded_path = await asyncio.to_thread(
@@ -229,7 +259,9 @@ async def download_from_url(url: str, subdir: str) -> str:
             return str(Path(subdir) / downloaded_path.name)
         except Exception as exc:
             logger.error("yt-dlp failed to download %s: %s", url, exc)
-            raise ValidationAppError(f"Could not download video from URL: {exc}") from exc
+            raise ValidationAppError(
+                f"Could not download video from URL: {_strip_ansi(str(exc))}"
+            ) from exc
 
     suffix = Path(urlparse(url).path).suffix or ".mp4"
     filename = f"{file_id}{suffix}"

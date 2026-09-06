@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { Scissors, FileText, Check } from 'lucide-react';
+import { Scissors, FileText, Check, Sparkles } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { GradientButton } from '@/components/ui/GradientButton';
 import type { TranscriptSegment } from '@/types';
@@ -82,30 +82,59 @@ export function TextBasedTrimmer({
               seg.start_time >= selectedStart - 0.5 && seg.end_time <= selectedEnd + 0.5;
 
             return (
-              <button
+              <div
                 key={seg.id}
-                type="button"
-                onClick={() => handleSegmentClick(seg)}
                 className={cn(
-                  'w-full text-left rounded-lg p-2 transition-all flex items-start justify-between gap-3 border',
+                  'w-full rounded-lg p-2 transition-all flex items-start justify-between gap-3 border',
                   isIncluded
                     ? 'border-primary/40 bg-primary/10 text-foreground font-medium shadow-sm'
                     : 'border-transparent text-muted-foreground hover:bg-muted/40 opacity-70 hover:opacity-100',
                 )}
               >
-                <div className="flex-1">
+                <button
+                  type="button"
+                  onClick={() => handleSegmentClick(seg)}
+                  className="flex-1 text-left"
+                >
                   <span className="mr-2 font-mono text-[10px] text-muted-foreground">
                     {Math.floor(seg.start_time)}s - {Math.floor(seg.end_time)}s
                   </span>
+                  {seg.is_highlight && (
+                    <span
+                      title="AI-picked viral hook"
+                      className="mr-1.5 inline-flex items-center gap-0.5 rounded-full bg-amber-400/20 px-1.5 py-0.5 text-[9px] font-semibold text-amber-600"
+                    >
+                      <Sparkles className="h-2.5 w-2.5" />
+                      AI pick
+                    </span>
+                  )}
                   <span>{seg.text}</span>
-                </div>
+                </button>
 
-                {isIncluded && (
-                  <span className="shrink-0 rounded-full bg-primary/20 p-0.5 text-primary">
-                    <Check className="h-3 w-3" />
-                  </span>
-                )}
-              </button>
+                <div className="flex shrink-0 items-center gap-1">
+                  <button
+                    type="button"
+                    title="Start the clip here"
+                    onClick={() => setSelectedStart(seg.start_time)}
+                    className="rounded-md border border-glass-border px-1.5 py-0.5 text-[9px] font-semibold text-muted-foreground hover:border-primary/40 hover:text-primary"
+                  >
+                    Start
+                  </button>
+                  <button
+                    type="button"
+                    title="End the clip here"
+                    onClick={() => setSelectedEnd(seg.end_time)}
+                    className="rounded-md border border-glass-border px-1.5 py-0.5 text-[9px] font-semibold text-muted-foreground hover:border-primary/40 hover:text-primary"
+                  >
+                    End
+                  </button>
+                  {isIncluded && (
+                    <span className="rounded-full bg-primary/20 p-0.5 text-primary">
+                      <Check className="h-3 w-3" />
+                    </span>
+                  )}
+                </div>
+              </div>
             );
           })
         )}

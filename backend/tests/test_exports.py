@@ -202,6 +202,29 @@ class TestDownload:
         assert response.headers["content-type"] == "video/mp4"
         assert response.content == b"fake mp4 bytes"
 
+    def test_download_via_query_param_token_succeeds(
+        self,
+        client: TestClient,
+        db_session: Session,
+        test_user: User,
+        tmp_path: Path,
+    ) -> None:
+        video_file = tmp_path / "rendered.mp4"
+        video_file.write_bytes(b"query param mp4 bytes")
+
+        clip = _make_clip(
+            db_session,
+            test_user,
+            status=ClipStatus.ready,
+            video_file_path=str(video_file),
+        )
+        token = create_access_token({"sub": str(test_user.id)})
+        # Without headers, authenticating solely via ?token=
+        response = client.get(f"/api/v1/clips/{clip.id}/download?token={token}")
+        assert response.status_code == 200
+        assert response.headers["content-type"] == "video/mp4"
+        assert response.content == b"query param mp4 bytes"
+
     def test_download_other_users_clip_404(
         self,
         client: TestClient,

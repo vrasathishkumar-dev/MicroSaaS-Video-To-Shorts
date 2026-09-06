@@ -487,8 +487,23 @@ def extract_search_phrase(text: str, max_words: int = 2) -> str:
     return " ".join(keep[:max_words])
 
 
-def _extract_keywords_with_timing(clip: Clip, max_keywords: int = 3) -> list[tuple[str, float, float]]:
-    """Extract search keywords paired with their exact spoken occurrence timestamps."""
+def _extract_keywords_with_timing(
+    clip: Clip, max_keywords: int = 20
+) -> list[tuple[str, float, float]]:
+    """Extract search keywords paired with timestamps that span the whole clip.
+
+    One window per spoken segment overlapping the clip, snapped edge to
+    edge so B-roll covers the clip back to back -- from 0 to the first
+    window's original start, through any pause between segments, to
+    clip_duration after the last one -- rather than only the handful of
+    seconds near the start that a hard 3-keyword cap used to leave
+    everything else silently uncovered.
+
+    `max_keywords` is a safety cap, not a target: a heavily-segmented
+    transcript stops here rather than firing unbounded concurrent provider
+    searches (see `auto_source_broll`) or building an unbounded ffmpeg
+    filter graph.
+    """
     video_project = clip.video_project
     clip_duration = clip.end_time - clip.start_time
     if clip_duration <= 0:
@@ -504,28 +519,47 @@ def _extract_keywords_with_timing(clip: Clip, max_keywords: int = 3) -> list[tup
         segments.sort(key=lambda s: s.start_time)
 
     if not segments:
-        words = extract_keywords(clip.caption_text or "", max_keywords=max_keywords)
+        words = extract_keywords(clip.caption_text or "", max_keywords=3)
         seg_len = clip_duration / max(len(words), 1)
         return [(w, round(i * seg_len, 2), round((i + 1) * seg_len, 2)) for i, w in enumerate(words)]
 
     keyword_timings: list[tuple[str, float, float]] = []
-    seen_words: set[str] = set()
+    last_phrase: str | None = None
 
     for seg in segments:
         # One phrase per spoken segment: the sentence is the context that
         # makes a stock search specific, and splitting it into separate
-        # one-word searches throws that context away.
-        phrase = extract_search_phrase(seg.text, max_words=2)
-        if not phrase or phrase in seen_words:
+        # one-word searches throws that context away. A segment whose own
+        # words are all stopwords/filler carries the previous segment's
+        # phrase forward instead of leaving its stretch of the clip with
+        # no B-roll window at all.
+        phrase = extract_search_phrase(seg.text, max_words=2) or last_phrase
+        if not phrase:
             continue
+        last_phrase = phrase
 
         rel_start = max(0.0, round(seg.start_time - clip.start_time, 2))
-        rel_end = min(clip_duration, max(rel_start + 2.5, round(seg.end_time - clip.start_time, 2)))
+        rel_end = min(clip_duration, round(seg.end_time - clip.start_time, 2))
+        if rel_end <= rel_start:
+            continue
 
-        seen_words.add(phrase)
         keyword_timings.append((phrase, rel_start, rel_end))
         if len(keyword_timings) >= max_keywords:
             break
+
+    if not keyword_timings:
+        return []
+
+    # Snap edge to edge: no gap before the first window, between windows
+    # (a pause in speech), or after the last one.
+    kw, _, end = keyword_timings[0]
+    keyword_timings[0] = (kw, 0.0, end)
+    for i in range(len(keyword_timings) - 1):
+        kw, start, _ = keyword_timings[i]
+        next_start = keyword_timings[i + 1][1]
+        keyword_timings[i] = (kw, start, next_start)
+    kw, start, _ = keyword_timings[-1]
+    keyword_timings[-1] = (kw, start, clip_duration)
 
     return keyword_timings
 
@@ -541,9 +575,16 @@ async def auto_source_broll(db: Session, clip: Clip) -> list[BrollAsset]:
     reuses the same stock clip twice in one short -- neighbouring keywords
     from the same sentence routinely return the same top hit, and seeing it
     cut in twice is more distracting than having no B-roll at all.
+
+    Replaces this clip's previous auto-generated batch (if any) rather than
+    adding to it, so re-running this -- the editor's "Auto-insert B-roll"
+    button -- regenerates instead of piling duplicates on top of what's
+    already there. B-roll the user added manually via search is never
+    touched, since only rows this function created are marked
+    `auto_generated`.
     """
 
-    kw_timings = _extract_keywords_with_timing(clip, max_keywords=3)
+    kw_timings = _extract_keywords_with_timing(clip)
     if not kw_timings:
         logger.info("No keywords extracted for clip_id=%s; skipping auto-source", clip.id)
         return []
@@ -570,11 +611,15 @@ async def auto_source_broll(db: Session, clip: Clip) -> list[BrollAsset]:
             keyword=kw,
             position_start=pos_start,
             position_end=pos_end,
+            auto_generated=True,
         )
-        db.add(asset)
         created.append(asset)
 
     if created:
+        db.query(BrollAsset).filter(
+            BrollAsset.clip_id == clip.id, BrollAsset.auto_generated.is_(True)
+        ).delete(synchronize_session=False)
+        db.add_all(created)
         db.commit()
         for asset in created:
             db.refresh(asset)

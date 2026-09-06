@@ -5,7 +5,7 @@ from __future__ import annotations
 from datetime import datetime
 
 from pydantic import BaseModel, ConfigDict, Field
-from app.models.clip import ClipCaptionStyle, ClipFraming, ClipStatus
+from app.models.clip import BrollPlacement, ClipCaptionStyle, ClipFraming, ClipStatus
 from app.schemas.broll import BrollAssetResponse
 
 
@@ -23,6 +23,7 @@ class ClipResponse(BaseModel):
     caption_text: str | None
     framing_mode: ClipFraming
     caption_style: ClipCaptionStyle
+    broll_placement: BrollPlacement
     video_file_path: str | None
     thumbnail_path: str | None
     virality_score: float | None
@@ -51,6 +52,7 @@ class ClipUpdateRequest(BaseModel):
     caption_text: str | None = None
     framing_mode: ClipFraming | None = None
     caption_style: ClipCaptionStyle | None = None
+    broll_placement: BrollPlacement | None = None
 
 
 class ClipGenerateRequest(BaseModel):

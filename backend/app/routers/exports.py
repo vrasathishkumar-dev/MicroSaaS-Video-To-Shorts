@@ -336,9 +336,12 @@ async def clip_thumbnail(
 async def download_clip(
     clip_id: int,
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(get_current_user_for_media),
 ) -> FileResponse:
     """Stream the rendered MP4 as an attachment, once export has completed.
+
+    Accepts authentication either via standard `Authorization: Bearer <token>`
+    header or `?token=` query parameter (enabling direct browser download).
 
     Raises:
         ValidationAppError: the clip hasn't finished rendering (or failed).
@@ -354,7 +357,7 @@ async def download_clip(
     if not path.is_file():
         raise NotFoundError("Exported video file")
 
-    safe_title = _UNSAFE_FILENAME_CHARS.sub("-", clip.title).strip("-") or "clip"
+    safe_title = _UNSAFE_FILENAME_CHARS.sub("-", clip.title).strip("-")[:60] or "clip"
     filename = f"{safe_title}-{clip.id}.mp4"
 
     return FileResponse(path=path, media_type="video/mp4", filename=filename)

@@ -48,6 +48,7 @@ import {
 } from '@/services/exportService';
 import type {
   BrollAsset,
+  BrollPlacement,
   CaptionFrame,
   CaptionStylePreset,
   Clip,
@@ -68,6 +69,7 @@ export function ClipEditorPage() {
   const [framing, setFraming] = useState<ClipFraming | null>(null);
   const [captionEvents, setCaptionEvents] = useState<CaptionFrame[]>([]);
   const [framingMode, setFramingMode] = useState<FramingMode>('speaker_focus');
+  const [brollPlacement, setBrollPlacement] = useState<BrollPlacement>('bottom_right');
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [previewFailed, setPreviewFailed] = useState(false);
@@ -113,6 +115,7 @@ export function ClipEditorPage() {
       // The studio opens on what this clip is actually set to render as.
       setFramingMode(data.framing_mode ?? 'speaker_focus');
       setCaptionPreset(data.caption_style ?? 'hormozi');
+      setBrollPlacement(data.broll_placement ?? 'bottom_right');
       if (data.video_project_id) {
         try {
           const segments = await getTranscript(data.video_project_id);
@@ -204,6 +207,11 @@ export function ClipEditorPage() {
     void saveRenderChoice({ caption_style: preset });
   };
 
+  const handleBrollPlacementChange = (placement: BrollPlacement) => {
+    setBrollPlacement(placement);
+    void saveRenderChoice({ broll_placement: placement });
+  };
+
   const handleTrimSave = async (startTime: number, endTime: number) => {
     if (!clip) return;
     const updated = await updateClip(clip.id, {
@@ -244,8 +252,9 @@ export function ClipEditorPage() {
       setIsDownloading(true);
       try {
         await downloadClip(clip.id);
-      } catch {
-        setError('Failed to download video file. Please try again.');
+      } catch (err: unknown) {
+        const msg = err instanceof Error ? err.message : 'Failed to download video file. Please try again.';
+        setError(msg);
       } finally {
         setIsDownloading(false);
       }
@@ -580,8 +589,11 @@ export function ClipEditorPage() {
 
                 {/* Subtitles, as the export will burn them in: the
                     renderer's own timeline, this clip's chosen preset, and
-                    the word it lights up. */}
-                {activeCaption && (
+                    the word it lights up. A `ready` clip already streams the
+                    rendered export, which has these burned into the pixels --
+                    drawing this too would double them up, so it's preview-only
+                    for clips that haven't been rendered yet. */}
+                {activeCaption && clip.status !== 'ready' && (
                   <div className="absolute inset-x-4 bottom-14 z-20 pointer-events-none text-center">
                     <span
                       className={cn(
@@ -720,7 +732,11 @@ export function ClipEditorPage() {
 
           {/* Tab 3: B-Roll Media */}
           {activeTab === 'broll' && (
-            <BrollPanel clipId={clip.id} />
+            <BrollPanel
+              clipId={clip.id}
+              placement={brollPlacement}
+              onPlacementChange={handleBrollPlacementChange}
+            />
           )}
 
           {/* Tab 4: Export */}

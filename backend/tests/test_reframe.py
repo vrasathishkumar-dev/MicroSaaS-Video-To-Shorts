@@ -439,6 +439,31 @@ class TestSplitScreen:
 
         assert _conversation(tracks[:1], motion, 0, 40) == []
 
+    def test_overlap_inside_a_longer_take_is_not_averaged_away(self) -> None:
+        """A dominant talker's shot-wide average shouldn't hide a real
+        interruption -- a brief cross-talk moment diluted by the rest of a
+        longer take used to read as "quiet listener" and never split."""
+
+        rows = 80
+        tracks, motion = self._two_faces(rows=rows)
+        motion[:, 95:130, 70:110] = 100  # left talks throughout
+        motion[20:40, 95:130, 350:390] = 90  # right interrupts for one window
+
+        speakers = _conversation(tracks, motion, 0, rows, sample_interval=0.1)
+
+        assert len(speakers) == 2
+
+    def test_overlap_check_needs_a_sample_interval(self) -> None:
+        """Without a sample interval, the whole-shot average is the only
+        check -- same behaviour as before the rolling-window check existed."""
+
+        rows = 80
+        tracks, motion = self._two_faces(rows=rows)
+        motion[:, 95:130, 70:110] = 100
+        motion[20:40, 95:130, 350:390] = 90
+
+        assert _conversation(tracks, motion, 0, rows) == []
+
     def test_panes_are_stacked_in_the_order_people_sit(self) -> None:
         left = _face_subject((60, 60, 60, 60))
         right = _face_subject((340, 60, 60, 60))

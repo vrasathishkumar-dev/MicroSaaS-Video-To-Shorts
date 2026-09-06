@@ -15,6 +15,7 @@ const baseClip: Clip = {
   status: 'ready',
   caption_text: null,
   framing_mode: 'speaker_focus',
+  broll_placement: 'bottom_right',
   caption_style: 'hormozi',
   video_file_path: null,
   thumbnail_path: null,

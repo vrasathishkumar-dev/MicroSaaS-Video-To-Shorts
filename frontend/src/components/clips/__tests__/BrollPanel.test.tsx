@@ -31,7 +31,7 @@ describe('BrollPanel', () => {
 
   it('shows a loading state, then the empty state when there is no B-roll', async () => {
     mockedGetClipBrollAssets.mockResolvedValueOnce([]);
-    render(<BrollPanel clipId={5} />);
+    render(<BrollPanel clipId={5} placement="bottom_right" onPlacementChange={vi.fn()} />);
 
     expect(screen.getByText(/loading b-roll/i)).toBeInTheDocument();
     expect(await screen.findByText(/no b-roll attached yet/i)).toBeInTheDocument();
@@ -39,7 +39,7 @@ describe('BrollPanel', () => {
 
   it('renders fetched B-roll assets', async () => {
     mockedGetClipBrollAssets.mockResolvedValueOnce(assets);
-    render(<BrollPanel clipId={5} />);
+    render(<BrollPanel clipId={5} placement="bottom_right" onPlacementChange={vi.fn()} />);
 
     expect(await screen.findByText('city skyline')).toBeInTheDocument();
     expect(screen.getByText('pexels')).toBeInTheDocument();
@@ -47,7 +47,7 @@ describe('BrollPanel', () => {
 
   it('shows an error message when loading fails', async () => {
     mockedGetClipBrollAssets.mockRejectedValueOnce(new Error('boom'));
-    render(<BrollPanel clipId={5} />);
+    render(<BrollPanel clipId={5} placement="bottom_right" onPlacementChange={vi.fn()} />);
 
     expect(await screen.findByText(/could not load b-roll/i)).toBeInTheDocument();
   });
@@ -57,12 +57,25 @@ describe('BrollPanel', () => {
     mockedGetClipBrollAssets.mockResolvedValueOnce([]).mockResolvedValueOnce(assets);
     mockedAutoSourceBroll.mockResolvedValueOnce(assets);
 
-    render(<BrollPanel clipId={5} />);
+    render(<BrollPanel clipId={5} placement="bottom_right" onPlacementChange={vi.fn()} />);
     await screen.findByText(/no b-roll attached yet/i);
 
     await user.click(screen.getByRole('button', { name: /auto-insert b-roll/i }));
 
     expect(await screen.findByText('city skyline')).toBeInTheDocument();
     expect(mockedAutoSourceBroll).toHaveBeenCalledWith(5);
+  });
+
+  it('reports a placement change without touching the B-roll list', async () => {
+    const user = userEvent.setup();
+    const onPlacementChange = vi.fn();
+    mockedGetClipBrollAssets.mockResolvedValueOnce([]);
+
+    render(<BrollPanel clipId={5} placement="bottom_right" onPlacementChange={onPlacementChange} />);
+    await screen.findByText(/no b-roll attached yet/i);
+
+    await user.click(screen.getByRole('button', { name: /^split$/i }));
+
+    expect(onPlacementChange).toHaveBeenCalledWith('split');
   });
 });

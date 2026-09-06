@@ -6,7 +6,7 @@ import enum
 from datetime import datetime
 from typing import TYPE_CHECKING
 
-from sqlalchemy import DateTime, Enum, Float, ForeignKey, String
+from sqlalchemy import Boolean, DateTime, Enum, Float, ForeignKey, String
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from sqlalchemy.sql import func
 
@@ -40,6 +40,13 @@ class BrollAsset(Base):
     keyword: Mapped[str] = mapped_column(String(255), nullable=False)
     position_start: Mapped[float] = mapped_column(Float, nullable=False)
     position_end: Mapped[float] = mapped_column(Float, nullable=False)
+    # True only for rows `auto_source_broll` created. Lets a re-click of
+    # "Auto-insert B-roll" replace its own previous batch instead of piling
+    # duplicates on top of it, without touching anything the user added
+    # manually via search -- those are never marked auto-generated.
+    auto_generated: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default="false"
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )

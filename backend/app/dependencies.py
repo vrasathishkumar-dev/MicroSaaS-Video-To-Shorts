@@ -21,6 +21,7 @@ from app.models.user import User
 
 # tokenUrl is the final registered path (routers get "/api/v1" prefix in main.py).
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/v1/auth/login")
+oauth2_scheme_optional = OAuth2PasswordBearer(tokenUrl="/api/v1/auth/login", auto_error=False)
 
 
 def _resolve_user_from_access_token(token: str | None, db: Session) -> User:
@@ -66,15 +67,15 @@ async def get_current_user(
 
 async def get_current_user_for_media(
     token: str | None = None,
+    header_token: str | None = Depends(oauth2_scheme_optional),
     db: Session = Depends(get_db),
 ) -> User:
-    """Resolve the current user for HTML `<video>`/`<audio>` element requests.
+    """Resolve the current user for HTML media streaming and direct download requests.
 
-    Browsers never attach an `Authorization` header for a plain `<video
-    src>` load, so media-streaming endpoints (e.g. clip preview) accept the
-    access token as a `?token=` query parameter instead. Only use this for
-    read-only media byte-streaming endpoints -- everything else should keep
-    using get_current_user's header-only Bearer flow.
+    Supports both `?token=` query parameter (essential for `<video src>`,
+    `<img>`, and native browser download triggers) and standard
+    `Authorization: Bearer <token>` headers.
     """
 
-    return _resolve_user_from_access_token(token, db)
+    effective_token = token or header_token
+    return _resolve_user_from_access_token(effective_token, db)

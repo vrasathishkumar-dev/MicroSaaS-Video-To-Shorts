@@ -404,7 +404,11 @@ def _compute_framing(
     conversations: list[tuple[float, float, list[_Subject]]] = []
     for first, last, shot_start in shots:
         tracks = _face_tracks(faces, first, last)
-        speakers = _conversation(tracks, motion, first, last) if tracks else []
+        speakers = (
+            _conversation(tracks, motion, first, last, sample_interval)
+            if tracks
+            else []
+        )
         if speakers:
             # More than one person in the conversation: show them all,
             # stacked, and keep the liveliest as what plays underneath.
@@ -885,6 +889,7 @@ def _conversation(  # type: ignore[no-untyped-def]
     motion,
     first_row: int,
     last_row: int,
+    sample_interval: float = 0.0,
 ) -> list[_Subject]:
     """The people to put on screen together, or [] for a single speaker.
 
@@ -898,6 +903,14 @@ def _conversation(  # type: ignore[no-untyped-def]
       giving a monologue while someone listens; splitting the screen would
       hand half of it to a nodding head, so the crop stays on the talker.
 
+    That second check is a shot-wide average, though, and a real overlap
+    can hide inside it: two people briefly talking over each other in a
+    shot where one of them otherwise carries most of it would average out
+    as "monologue with a listener" and never split. Where the whole-shot
+    average says no, a second pass checks rolling `_SPEAKER_SEGMENT_SECONDS`
+    windows for a stretch where the two leading candidates are both active
+    and close together -- catching the overlap the average washed out.
+
     Returned liveliest-first so the caller can pick a lead, then reordered
     left to right by the caller that lays out the panes.
     """
@@ -909,18 +922,55 @@ def _conversation(  # type: ignore[no-untyped-def]
     if segment.shape[0] == 0:
         return []
 
+    boxes = [_median_box(track) for track in tracks]
     scored = sorted(
-        ((_mouth_activity(segment, _median_box(track)), track) for track in tracks),
+        ((_mouth_activity(segment, box), box) for box in boxes),
         key=lambda pair: pair[0],
         reverse=True,
     )
     talking = [pair for pair in scored if pair[0] >= _SPLIT_MIN_ACTIVITY]
     if len(talking) < 2:
         return []
-    if talking[0][0] > talking[1][0] * _SPLIT_DOMINANCE:
-        return []
 
-    return [_face_subject(_median_box(track)) for _, track in talking[:_SPLIT_PANES]]
+    lead_score, lead_box = talking[0]
+    second_score, second_box = talking[1]
+    if lead_score <= second_score * _SPLIT_DOMINANCE:
+        return [_face_subject(box) for _, box in talking[:_SPLIT_PANES]]
+
+    if _overlap_in_a_window(segment, lead_box, second_box, sample_interval):
+        return [_face_subject(lead_box), _face_subject(second_box)]
+
+    return []
+
+
+def _overlap_in_a_window(  # type: ignore[no-untyped-def]
+    segment,
+    lead_box: tuple[float, float, float, float],
+    second_box: tuple[float, float, float, float],
+    sample_interval: float,
+) -> bool:
+    """Whether some rolling sub-window of `segment` has both faces talking.
+
+    Used only once the shot-wide average has already ruled one candidate a
+    clear dominant talker -- this looks for a shorter stretch where that
+    isn't true, e.g. a brief interruption or cross-talk moment.
+    """
+
+    rows_per_window = (
+        max(1, round(_SPEAKER_SEGMENT_SECONDS / sample_interval))
+        if sample_interval
+        else segment.shape[0]
+    )
+    for row_start in range(0, segment.shape[0], rows_per_window):
+        window = segment[row_start : row_start + rows_per_window]
+        if window.shape[0] == 0:
+            continue
+        a = _mouth_activity(window, lead_box)
+        b = _mouth_activity(window, second_box)
+        lo, hi = (a, b) if a <= b else (b, a)
+        if lo >= _SPLIT_MIN_ACTIVITY and hi <= lo * _SPLIT_DOMINANCE:
+            return True
+    return False
 
 
 def _split_framing(

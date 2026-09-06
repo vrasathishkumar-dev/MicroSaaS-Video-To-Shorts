@@ -1,5 +1,6 @@
 import api, { API_URL, getAccessToken } from '@/services/api';
 import type {
+  BrollPlacement,
   CaptionStylePreset,
   Clip,
   ClipCaptions,
@@ -16,6 +17,7 @@ export interface UpdateClipPayload {
   /** Framing and caption look are read back by the renderer at export. */
   framing_mode?: FramingMode;
   caption_style?: CaptionStylePreset;
+  broll_placement?: BrollPlacement;
 }
 
 /**

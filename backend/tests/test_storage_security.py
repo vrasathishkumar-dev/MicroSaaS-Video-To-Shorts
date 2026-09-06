@@ -17,6 +17,7 @@ Both were added by a security review that found:
 from __future__ import annotations
 
 import ipaddress
+import shutil
 import socket
 
 import httpx
@@ -27,11 +28,25 @@ from pydantic import ValidationError
 from app.exceptions import ValidationAppError
 from app.schemas.broll import BrollInsertRequest
 from app.services import storage as storage_module
-from app.services.storage import _assert_public_http_url, download_from_url, save_upload
+from app.services.storage import (
+    _assert_public_http_url,
+    _strip_ansi,
+    download_from_url,
+    save_upload,
+)
 
 # ---------------------------------------------------------------------------
 # _assert_public_http_url
 # ---------------------------------------------------------------------------
+
+
+class TestStripAnsi:
+    def test_strips_color_codes_from_ytdlp_style_error(self) -> None:
+        raw = "\x1b[0;31mERROR:\x1b[0m Postprocessing: Conversion failed!"
+        assert _strip_ansi(raw) == "ERROR: Postprocessing: Conversion failed!"
+
+    def test_leaves_plain_text_unchanged(self) -> None:
+        assert _strip_ansi("no escapes here") == "no escapes here"
 
 
 class TestAssertPublicHttpUrl:
@@ -272,7 +287,32 @@ def _patch_stream_sequence(
     monkeypatch.setattr(httpx.AsyncClient, "stream", fake_stream)
 
 
+def _fake_disk_usage(free_bytes: int):
+    return lambda _path: shutil._ntuple_diskusage(total=0, used=0, free=free_bytes)
+
+
 class TestDownloadFromUrl:
+    @pytest.fixture(autouse=True)
+    def _ample_disk_space(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        # These tests exercise other rejection paths (content-type, redirect
+        # revalidation, HTTP status) -- without this, a real host running low
+        # on disk would trip the new disk-space check first and each test
+        # would "pass" for the wrong reason (see test_rejects_when_disk_is_nearly_full
+        # for the one test that deliberately overrides this).
+        monkeypatch.setattr(
+            storage_module.shutil, "disk_usage", _fake_disk_usage(100 * 1024 * 1024 * 1024)
+        )
+
+    @pytest.mark.asyncio
+    async def test_rejects_when_disk_is_nearly_full(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(storage_module.socket, "getaddrinfo", _fake_getaddrinfo_host_aware)
+        monkeypatch.setattr(storage_module.shutil, "disk_usage", _fake_disk_usage(1024))
+
+        with pytest.raises(ValidationAppError, match="disk space"):
+            await download_from_url("https://cdn.example.com/video.mp4", subdir="videos")
+
     @pytest.mark.asyncio
     async def test_downloads_video_successfully(self, monkeypatch: pytest.MonkeyPatch) -> None:
         _patch_stream_sequence(
@@ -308,7 +348,7 @@ class TestDownloadFromUrl:
         )
         monkeypatch.setattr(storage_module.socket, "getaddrinfo", _fake_getaddrinfo_host_aware)
 
-        with pytest.raises(ValidationAppError):
+        with pytest.raises(ValidationAppError, match="video"):
             await download_from_url("https://cdn.example.com/notavideo", subdir="videos")
 
     @pytest.mark.asyncio
@@ -332,7 +372,7 @@ class TestDownloadFromUrl:
         )
         monkeypatch.setattr(storage_module.socket, "getaddrinfo", _fake_getaddrinfo_host_aware)
 
-        with pytest.raises(ValidationAppError):
+        with pytest.raises(ValidationAppError, match="non-public address"):
             await download_from_url("https://public.example.com/redirect", subdir="videos")
 
     @pytest.mark.asyncio
@@ -348,5 +388,5 @@ class TestDownloadFromUrl:
         )
         monkeypatch.setattr(storage_module.socket, "getaddrinfo", _fake_getaddrinfo_host_aware)
 
-        with pytest.raises(ValidationAppError):
+        with pytest.raises(ValidationAppError, match="HTTP 404"):
             await download_from_url("https://cdn.example.com/gone.mp4", subdir="videos")

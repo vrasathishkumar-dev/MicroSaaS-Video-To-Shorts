@@ -1,4 +1,14 @@
-import { Film, Loader2, Search, Sparkles, Trash2 } from 'lucide-react';
+import {
+  Film,
+  Loader2,
+  PanelBottom,
+  PanelTop,
+  PictureInPicture2,
+  Rows2,
+  Search,
+  Sparkles,
+  Trash2,
+} from 'lucide-react';
 import { useCallback, useEffect, useState } from 'react';
 import { BrollSearchModal } from '@/components/clips/BrollSearchModal';
 import { GlassCard } from '@/components/ui/GlassCard';
@@ -9,19 +19,34 @@ import {
   getClipBrollAssets,
   removeBroll,
 } from '@/services/brollService';
-import type { BrollAsset } from '@/types';
+import type { BrollAsset, BrollPlacement } from '@/types';
 
 export interface BrollPanelProps {
   clipId: number;
+  /** Where B-roll sits on screen for this clip -- one choice for the whole clip. */
+  placement: BrollPlacement;
+  onPlacementChange: (placement: BrollPlacement) => void;
 }
+
+const PLACEMENT_OPTIONS: Array<{
+  value: BrollPlacement;
+  label: string;
+  icon: typeof PictureInPicture2;
+}> = [
+  { value: 'bottom_right', label: 'Corner', icon: PictureInPicture2 },
+  { value: 'top', label: 'Top', icon: PanelTop },
+  { value: 'bottom', label: 'Bottom', icon: PanelBottom },
+  { value: 'split', label: 'Split', icon: Rows2 },
+];
 
 /**
  * Self-contained B-roll management panel for a single clip. Fetches its own
  * data on mount, lets the user auto-source B-roll, search for it manually,
- * or remove an attached asset. Meant to be dropped into a clip editor layout
- * as `<BrollPanel clipId={clip.id} />`.
+ * remove an attached asset, or change where B-roll sits on screen. Meant to
+ * be dropped into a clip editor layout as
+ * `<BrollPanel clipId={clip.id} placement={p} onPlacementChange={fn} />`.
  */
-export function BrollPanel({ clipId }: BrollPanelProps) {
+export function BrollPanel({ clipId, placement, onPlacementChange }: BrollPanelProps) {
   const [assets, setAssets] = useState<BrollAsset[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [isAutoSourcing, setIsAutoSourcing] = useState(false);
@@ -107,6 +132,26 @@ export function BrollPanel({ clipId }: BrollPanelProps) {
             Auto-insert B-roll
           </GradientButton>
         </div>
+      </div>
+
+      <div className="mb-4 flex items-center gap-1.5 p-1 w-fit rounded-full bg-muted/60 border border-glass-border text-[11px] font-medium">
+        <span className="pl-2 pr-1 text-muted-foreground">Placement:</span>
+        {PLACEMENT_OPTIONS.map(({ value, label, icon: Icon }) => (
+          <button
+            key={value}
+            type="button"
+            onClick={() => onPlacementChange(value)}
+            className={cn(
+              'flex items-center gap-1 px-3 py-1 rounded-full transition-all',
+              placement === value
+                ? 'bg-primary text-white shadow-sm'
+                : 'text-muted-foreground hover:text-foreground'
+            )}
+          >
+            <Icon className="h-3 w-3" />
+            {label}
+          </button>
+        ))}
       </div>
 
       {error && (

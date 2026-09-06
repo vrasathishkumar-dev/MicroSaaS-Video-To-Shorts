@@ -39,6 +39,8 @@ class Settings(BaseSettings):
     ALLOWED_ORIGINS: list[str] = [
         "http://localhost:5173",
         "http://localhost:3000",
+        "http://127.0.0.1:5173",
+        "http://127.0.0.1:3000",
     ]
 
     # Third-party media APIs (B-roll)
@@ -94,8 +96,9 @@ class Settings(BaseSettings):
     # attached. The inserted assets stay editable/removable in the clip
     # editor, per the B-roll module's rules.
     BROLL_AUTO_ON_EXPORT: bool = True
-    # How B-roll is composited: "pip" (inset card) or "fullscreen" (cutaway).
-    RENDER_BROLL_MODE: str = "pip"
+    # Sizing for the "bottom_right" BrollPlacement's PIP card. Other
+    # placements (top/bottom/split) size themselves from RENDER_HEIGHT
+    # directly -- see app.services.video_render._apply_broll.
     RENDER_PIP_WIDTH_RATIO: float = 0.33
     # Caption font size and bottom margin, as a fraction of frame height.
     # The margin keeps captions clear of the YouTube Shorts UI overlay.

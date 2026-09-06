@@ -51,11 +51,12 @@ Design notes / trade-offs:
   [position_start, position_end] window, which is interpreted as
   **seconds relative to the exported clip's own timeline** (0 = clip
   start), since that's the only coordinate space this module can reason
-  about without coupling to the B-roll module's internals. `RENDER_BROLL_MODE`
-  picks `pip` (default; a bordered picture-in-picture card in the top
-  corner) or `fullscreen` (a full-frame cutaway, the more editorial look).
-  Every legitimately-created BrollAsset.asset_url is a remote Pexels/
-  Pixabay http(s) URL (see BrollInsertRequest's validator in
+  about without coupling to the B-roll module's internals. `clip.broll_placement`
+  (see `BrollPlacement`) picks where it sits: `bottom_right` (default; a
+  bordered picture-in-picture card), `top`/`bottom` (a full-width band
+  across that third of the frame), or `split` (an even half-and-half stack
+  with the main video). Every legitimately-created BrollAsset.asset_url is
+  a remote Pexels/Pixabay http(s) URL (see BrollInsertRequest's validator in
   app.schemas.broll), so each is downloaded to a per-render temp directory
   before compositing (see _download_remote_broll) -- a failed download for
   one asset just skips that overlay (logged) rather than failing the whole
@@ -89,7 +90,7 @@ from sqlalchemy.orm import Session, joinedload
 from app.config import settings
 from app.database import SessionLocal
 from app.models.broll_asset import BrollAsset
-from app.models.clip import Clip, ClipCaptionStyle, ClipFraming, ClipStatus
+from app.models.clip import BrollPlacement, Clip, ClipCaptionStyle, ClipFraming, ClipStatus
 from app.models.transcript_segment import TranscriptSegment
 from app.models.video_project import VideoProject
 from app.services.caption_render import render_caption_images
@@ -122,6 +123,9 @@ _IMAGE_SUFFIXES = {".jpg", ".jpeg", ".png", ".webp", ".bmp", ".gif"}
 _BROLL_DOWNLOAD_TIMEOUT = httpx.Timeout(20.0, connect=10.0)
 _MAX_BROLL_DOWNLOAD_BYTES = 200 * 1024 * 1024  # 200MB
 _BROLL_CHUNK_SIZE = 1024 * 1024
+
+# How much of the frame height a "top"/"bottom" BrollPlacement band covers.
+_BROLL_BAND_HEIGHT_RATIO = 0.35
 
 # Caption layout/timing. Chunks are kept short so a burned-in line never
 # needs to wrap on a 1080-wide frame and stays readable at phone size.
@@ -273,6 +277,7 @@ def _render_and_persist(session: Session, clip: Clip) -> None:
                 tmp_dir=Path(tmp_dir),
                 framing=framing_mode_str,
                 caption_style=clip.caption_style,
+                broll_placement=clip.broll_placement,
             )
     except FileNotFoundError:
         logger.error(
@@ -912,16 +917,42 @@ def _speaker_framed(
 
 
 def _apply_broll(
-    video_stream: Any, broll_assets: list[BrollAsset], duration: float, tmp_dir: Path
+    video_stream: Any,
+    broll_assets: list[BrollAsset],
+    duration: float,
+    tmp_dir: Path,
+    placement: BrollPlacement = BrollPlacement.bottom_right,
 ) -> Any:
-    """Composite each resolvable B-roll asset over the clip's timeline."""
+    """Composite each resolvable B-roll asset over the clip's timeline.
+
+    `placement` is one choice for the whole clip -- see `BrollPlacement`.
+    `bottom_right` scales each asset into a small bordered PIP card;
+    `top`/`bottom` scale it to fill the full width of that third of the
+    frame; `split` gives it an even half of the frame, with the main video
+    resized into the other half so nothing gets covered.
+    """
 
     width = settings.RENDER_WIDTH
     height = settings.RENDER_HEIGHT
-    fullscreen = settings.RENDER_BROLL_MODE.lower() == "fullscreen"
     pip_width = int(width * settings.RENDER_PIP_WIDTH_RATIO)
     pip_margin = int(width * 0.03)
     border = max(2, pip_width // 90)
+    band_height = int(height * _BROLL_BAND_HEIGHT_RATIO)
+    half_height = height // 2
+
+    if placement == BrollPlacement.split:
+        # The main video shrinks into its own top half up front (not
+        # per-asset, since ffmpeg's scale/pad can't change mid-stream) and
+        # the bottom half is padded in as black canvas for B-roll to fill.
+        # ponytail: a stretch with no B-roll enabled shows that half as a
+        # black band rather than falling back to a full-frame main video --
+        # acceptable since auto-sourcing now targets full-clip coverage;
+        # revisit if manual editing leaves visible gaps common.
+        video_stream = (
+            video_stream.filter("scale", width, half_height)
+            .filter("pad", width, height, 0, 0, color="black")
+            .filter("setsar", 1)
+        )
 
     for asset in broll_assets:
         local_path = _resolve_broll_path(asset.asset_url, tmp_dir)
@@ -961,15 +992,17 @@ def _apply_broll(
                 str(local_path), stream_loop=-1, t=window_duration
             )
 
-        if fullscreen:
-            overlay_stream = (
-                broll_input.video.filter(
-                    "scale", width, height, force_original_aspect_ratio="increase"
-                )
-                .filter("crop", width, height)
-                .filter("setsar", 1)
-            )
-            overlay_x, overlay_y = 0, 0
+        if placement == BrollPlacement.split:
+            overlay_stream = broll_input.video.filter(
+                "scale", width, half_height
+            ).filter("setsar", 1)
+            overlay_x, overlay_y = 0, half_height
+        elif placement in (BrollPlacement.top, BrollPlacement.bottom):
+            overlay_stream = broll_input.video.filter(
+                "scale", width, band_height, force_original_aspect_ratio="increase"
+            ).filter("crop", width, band_height).filter("setsar", 1)
+            overlay_x = 0
+            overlay_y = 0 if placement == BrollPlacement.top else height - band_height
         else:
             overlay_stream = (
                 broll_input.video.filter("scale", pip_width - 2 * border, -2)
@@ -985,7 +1018,12 @@ def _apply_broll(
                     color="white@0.9",
                 )
             )
-            overlay_x, overlay_y = width - pip_width - pip_margin, pip_margin
+            # y is an ffmpeg runtime expression, not a Python int: the PIP
+            # card's rendered height depends on each asset's own aspect
+            # ratio (scaled to a fixed width, height computed via -2), so
+            # anchoring it to the bottom can't be computed ahead of time.
+            overlay_x = width - pip_width - pip_margin
+            overlay_y = f"main_h-overlay_h-{pip_margin}"
 
         # Shift the overlay's own timeline so it starts *at* its window
         # rather than having already played through while hidden.
@@ -1015,6 +1053,7 @@ def _run_ffmpeg(
     tmp_dir: Path,
     framing: str | None = None,
     caption_style: ClipCaptionStyle | None = None,
+    broll_placement: BrollPlacement = BrollPlacement.bottom_right,
 ) -> SpeakerFraming | None:
     """Build and execute the ffmpeg filter graph for one clip.
 
@@ -1038,11 +1077,12 @@ def _run_ffmpeg(
         framing=framing,
     )
     video_stream = video_stream.filter("fps", fps=settings.RENDER_FPS)
-    video_stream = _apply_broll(video_stream, broll_assets, duration, tmp_dir)
+    video_stream = _apply_broll(
+        video_stream, broll_assets, duration, tmp_dir, broll_placement
+    )
     video_stream = _apply_captions(video_stream, captions, tmp_dir, caption_style)
 
     _encode(video_stream, main_input, output_path, source_path)
-
     return speaker_framing
 
 

@@ -29,9 +29,6 @@ logger = logging.getLogger(__name__)
 
 # Fraction of the frame width text may occupy before it wraps to a new line.
 _TEXT_WIDTH_RATIO = 0.86
-# Lines per caption. Chunks are short by construction (see video_render's
-# _chunk_caption_text); this is a backstop for one very long word run.
-_MAX_LINES = 3
 # Past this many words a caption is a run of text, not a phrase with a
 # beat; highlighting through it costs an overlay per word for no gain.
 _MAX_HIGHLIGHT_WORDS = 8
@@ -343,7 +340,13 @@ def caption_frames(
 
 
 def _wrap(text: str, font, max_width: int) -> list[str]:  # type: ignore[no-untyped-def]
-    """Greedily wrap `text` to at most `_MAX_LINES` lines of `max_width` px."""
+    """Greedily wrap `text` to lines no wider than `max_width` px.
+
+    No cap on the number of lines: capping used to force any leftover words
+    onto one final, unmeasured line, which could run wider than the frame
+    and get clipped at both edges. A single word that alone exceeds
+    `max_width` still overflows -- there's no narrower way to draw it.
+    """
 
     words = text.split()
     if not words:
@@ -356,12 +359,6 @@ def _wrap(text: str, font, max_width: int) -> list[str]:  # type: ignore[no-unty
         if current and _text_width(candidate, font) > max_width:
             lines.append(current)
             current = word
-            if len(lines) == _MAX_LINES - 1:
-                # Last allowed line: take the rest verbatim rather than
-                # dropping words off the end of the caption.
-                remaining = words[words.index(word) :]
-                lines.append(" ".join(remaining))
-                return lines
         else:
             current = candidate
     if current:

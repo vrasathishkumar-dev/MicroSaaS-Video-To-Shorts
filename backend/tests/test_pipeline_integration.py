@@ -182,6 +182,15 @@ def test_url_to_9x16_short_end_to_end(
     import app.services.storage as storage_module
 
     monkeypatch.setattr(storage_module, "_assert_public_http_url", lambda url: None)
+    # This suite's own host disk can legitimately be low on real free space;
+    # that's a real condition worth rejecting in production (see
+    # test_storage_security.py's dedicated coverage), but shouldn't fail this
+    # unrelated pipeline test.
+    monkeypatch.setattr(
+        storage_module.shutil,
+        "disk_usage",
+        lambda _path: shutil._ntuple_diskusage(total=0, used=0, free=100 * 1024 * 1024 * 1024),
+    )
     # The synthetic source is a colour card with silent audio: real
     # transcription (correctly) finds no speech in it, and running Whisper
     # in the suite would cost a model download and minutes per run. The

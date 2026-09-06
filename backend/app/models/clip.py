@@ -50,6 +50,24 @@ class ClipCaptionStyle(str, enum.Enum):
     minimal = "minimal"
 
 
+class BrollPlacement(str, enum.Enum):
+    """Where B-roll sits on screen relative to the main footage.
+
+    One choice for the whole clip -- every attached BrollAsset renders in
+    this spot, the same way `framing_mode` is one choice for the whole
+    clip rather than per shot. `bottom_right` is a small bordered
+    picture-in-picture card (today's only look, kept as the default so
+    existing clips render unchanged); `top`/`bottom` are a full-width band
+    across that third of the frame; `split` is an even half-and-half stack
+    with the main video in the other half.
+    """
+
+    bottom_right = "bottom_right"
+    top = "top"
+    bottom = "bottom"
+    split = "split"
+
+
 class Clip(Base, TimestampMixin):
     """A short, vertical clip generated from a VideoProject."""
 
@@ -82,6 +100,12 @@ class Clip(Base, TimestampMixin):
         Enum(ClipCaptionStyle, name="clip_caption_style"),
         default=ClipCaptionStyle.hormozi,
         server_default=ClipCaptionStyle.hormozi.value,
+        nullable=False,
+    )
+    broll_placement: Mapped[BrollPlacement] = mapped_column(
+        Enum(BrollPlacement, name="broll_placement"),
+        default=BrollPlacement.bottom_right,
+        server_default=BrollPlacement.bottom_right.value,
         nullable=False,
     )
     video_file_path: Mapped[str | None] = mapped_column(String(1024), nullable=True)

@@ -71,6 +71,8 @@ export interface Clip {
   caption_text: string | null;
   /** How the export fills the 9:16 canvas -- the editor's framing toggle. */
   framing_mode: FramingMode;
+  /** Where B-roll sits on screen -- the editor's B-roll placement toggle. */
+  broll_placement: BrollPlacement;
   video_file_path: string | null;
   thumbnail_path: string | null;
   broll_assets?: BrollAsset[];
@@ -156,6 +158,12 @@ export interface ClipFraming {
 
 /** How a clip fills the 9:16 canvas. Mirrors the backend's ClipFraming. */
 export type FramingMode = 'speaker_focus' | 'dynamic_blur' | 'fit';
+
+/**
+ * Where B-roll sits relative to the main footage. Mirrors the backend's
+ * BrollPlacement -- one choice for the whole clip, same as FramingMode.
+ */
+export type BrollPlacement = 'bottom_right' | 'top' | 'bottom' | 'split';
 
 /**
  * Caption looks the renderer can actually burn in. Mirrors the backend's
