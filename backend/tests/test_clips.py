@@ -6,7 +6,7 @@ from fastapi.testclient import TestClient
 from sqlalchemy.orm import Session
 
 from app.models.broll_asset import BrollAsset, BrollSource
-from app.models.clip import Clip, ClipCaptionStyle, ClipFraming
+from app.models.clip import Clip, ClipCaptionStyle, ClipFraming, ClipStatus
 from app.models.transcript_segment import TranscriptSegment
 from app.models.user import User
 from app.models.video_project import (
@@ -20,7 +20,10 @@ from app.services.clip_service import (
     _SENTENCE_BOUNDARY_ALLOWANCE_SECONDS,
     CLIP_LENGTH_TARGETS,
     _clamp_start_to_boundary,
+    _composite_virality_score,
     _extend_to_sentence_boundary,
+    _virality_reason,
+    score_clip_partial,
 )
 
 
@@ -970,3 +973,157 @@ class TestCascadeFromVideoProject:
         db_session.expire_all()
         remaining = db_session.query(Clip).filter(Clip.id.in_(clip_ids)).all()
         assert remaining == []
+
+
+class TestViralityScorePartial:
+    """Server-computed hook/completeness/virality scoring -- see backlog:
+    "Clip virality score is fake"."""
+
+    def test_generated_clip_gets_a_real_partial_score_with_null_framing(
+        self, client: TestClient, auth_headers: dict[str, str], db_session: Session, test_user
+    ) -> None:
+        project = _make_ready_project_with_highlights(db_session, test_user, n_highlights=1)
+        response = client.post(
+            "/api/v1/clips/generate",
+            json={"video_project_id": project.id},
+            headers=auth_headers,
+        )
+        clip = response.json()[0]
+
+        assert clip["framing_score"] is None
+        assert clip["hook_score"] is not None
+        assert clip["completeness_score"] is not None
+        assert clip["virality_score"] is not None
+        assert clip["virality_reason"]
+
+    def test_two_clips_with_different_signals_get_meaningfully_different_scores(
+        self,
+    ) -> None:
+        """Discrimination acceptance criterion: a clip with a strong hook
+        and clean sentence boundaries must not converge on the same score
+        as one with neither, by coincidence of duration."""
+
+        strong_segments = [
+            _segment(0.0, 6.0, "What's the biggest mistake people make?"),
+            _segment(
+                6.0,
+                20.0,
+                "The truth is nobody tells you the real reason this fails.",
+            ),
+        ]
+        strong_clip = Clip(
+            video_project_id=1,
+            user_id=1,
+            title="Strong",
+            start_time=0.0,
+            end_time=20.0,
+            order_index=0,
+        )
+        score_clip_partial(strong_clip, strong_segments)
+
+        weak_segments = [
+            _segment(0.0, 6.0, "and then we just kept talking about nothing much"),
+            _segment(6.0, 20.0, "so yeah it was just a regular day I guess"),
+        ]
+        weak_clip = Clip(
+            video_project_id=1,
+            user_id=1,
+            title="Weak",
+            start_time=0.0,
+            end_time=20.0,
+            order_index=0,
+        )
+        score_clip_partial(weak_clip, weak_segments)
+
+        assert strong_clip.virality_score > weak_clip.virality_score
+        # A rounding artifact would be a point or two -- this is a real gap.
+        assert strong_clip.virality_score - weak_clip.virality_score >= 30.0
+
+        # virality_reason names the actual weak/strong signals for each
+        # clip, not a fixed per-band string -- must differ between them.
+        assert strong_clip.virality_reason != weak_clip.virality_reason
+        assert "weak" in weak_clip.virality_reason.lower()
+
+    def test_review_band_reason_is_not_the_generic_middling_fallback(self) -> None:
+        """QA Bug 2 repro: hook_score in [35, 45.6) combined with
+        completeness_score=55 lands the composite under 50 ("Needs Manual
+        Review") without either sub-score crossing its own individual weak
+        threshold -- the reason must still flag the review, not read as
+        neutral/reassuring "middling" text."""
+
+        hook = 40.0
+        completeness = 55.0
+
+        composite = _composite_virality_score(hook, completeness, None)
+        assert composite < 50.0  # confirms this really is the review band
+
+        reason = _virality_reason(hook, completeness, None)
+
+        assert reason != (
+            "Middling signals across the board -- no standout strength or weakness."
+        )
+        assert "review" in reason.lower()
+        assert "hook" in reason.lower()
+
+    def test_editing_boundaries_recomputes_partial_score_and_nulls_framing(
+        self, client: TestClient, auth_headers: dict[str, str], db_session: Session, test_user
+    ) -> None:
+        """A stale framing result computed for the old boundaries must not
+        silently keep describing the new ones -- even on an already-`ready`
+        clip (per this story's own AC)."""
+
+        project = _make_ready_project_with_highlights(db_session, test_user, n_highlights=1)
+        gen_resp = client.post(
+            "/api/v1/clips/generate",
+            json={"video_project_id": project.id},
+            headers=auth_headers,
+        )
+        clip_json = gen_resp.json()[0]
+        clip_id = clip_json["id"]
+
+        # Simulate a clip that already rendered and got a refined score.
+        clip = db_session.query(Clip).filter(Clip.id == clip_id).first()
+        clip.status = ClipStatus.ready
+        clip.framing_score = 1.0
+        db_session.commit()
+
+        new_end = clip_json["start_time"] + 10.0
+        response = client.put(
+            f"/api/v1/clips/{clip_id}",
+            json={"end_time": new_end},
+            headers=auth_headers,
+        )
+        assert response.status_code == 200
+        body = response.json()
+
+        assert body["end_time"] == new_end
+        assert body["framing_score"] is None
+        assert body["hook_score"] is not None
+        assert body["completeness_score"] is not None
+        assert body["virality_score"] is not None
+        assert body["virality_reason"]
+
+    def test_editing_a_field_other_than_boundaries_does_not_touch_scores(
+        self, client: TestClient, auth_headers: dict[str, str], db_session: Session, test_user
+    ) -> None:
+        project = _make_ready_project_with_highlights(db_session, test_user, n_highlights=1)
+        gen_resp = client.post(
+            "/api/v1/clips/generate",
+            json={"video_project_id": project.id},
+            headers=auth_headers,
+        )
+        clip_json = gen_resp.json()[0]
+        clip_id = clip_json["id"]
+
+        clip = db_session.query(Clip).filter(Clip.id == clip_id).first()
+        clip.status = ClipStatus.ready
+        clip.framing_score = 1.0
+        db_session.commit()
+
+        response = client.put(
+            f"/api/v1/clips/{clip_id}",
+            json={"caption_text": "Only caption changed"},
+            headers=auth_headers,
+        )
+        assert response.status_code == 200
+        assert response.json()["framing_score"] == 1.0

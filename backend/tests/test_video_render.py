@@ -577,7 +577,7 @@ class TestSplitScreenFraming:
             "compute_speaker_framing",
             return_value=self._framing(with_split),
         ):
-            stream = video_render_module._frame_9x16(
+            stream, _ = video_render_module._frame_9x16(
                 ffmpeg.input("source.mp4"),
                 source_path="source.mp4",
                 start_time=0.0,
@@ -995,3 +995,212 @@ class TestSourceWithNoAudio:
         ).stdout.split()
         assert "video" in codecs
         assert "audio" not in codecs, "no audio to carry, so none should be written"
+
+
+class TestViralityScoreRefinement:
+    """Render pipeline's framing_score/virality_score refinement -- see
+    backlog: "Clip virality score is fake"."""
+
+    def _make_ready_clip(
+        self,
+        db_session: Session,
+        test_user: User,
+        *,
+        framing_mode: ClipFraming,
+        source_file_name: str = "source.mp4",
+    ) -> Clip:
+        import app.services.storage as storage_module
+
+        source_file = storage_module.UPLOAD_ROOT / "videos" / source_file_name
+        _make_test_source_video(source_file)
+
+        project = VideoProject(
+            user_id=test_user.id,
+            title="Refinement project",
+            source_type=SourceType.upload,
+            status=VideoProjectStatus.ready,
+            source_file_path=f"videos/{source_file_name}",
+        )
+        db_session.add(project)
+        db_session.commit()
+        db_session.refresh(project)
+
+        clip = Clip(
+            video_project_id=project.id,
+            user_id=test_user.id,
+            title="Clip",
+            start_time=0.0,
+            end_time=2.0,
+            order_index=0,
+            status=ClipStatus.rendering,
+            framing_mode=framing_mode,
+            # Simulates a clip that already has a partial score from
+            # generation time -- render only has to add the framing signal.
+            hook_score=80.0,
+            completeness_score=100.0,
+            virality_score=90.0,
+            virality_reason="Strong hook; strong sentence completeness.",
+        )
+        db_session.add(clip)
+        db_session.commit()
+        db_session.refresh(clip)
+        return clip
+
+    def test_render_refines_score_regardless_of_framing_mode(
+        self, db_session: Session, test_user: User
+    ) -> None:
+        """dynamic_blur (not speaker_focus) still gets a real framing
+        signal on a successful render -- compute_speaker_framing is called
+        for every clip's render now, not only speaker_focus ones."""
+
+        from app.services.reframe import SpeakerFraming, SpeakerWindow
+
+        clip = self._make_ready_clip(
+            db_session, test_user, framing_mode=ClipFraming.dynamic_blur
+        )
+        confident = SpeakerFraming(
+            source_width=640,
+            source_height=360,
+            crop_width=200,
+            crop_height=360,
+            windows=(SpeakerWindow(0.0, 0, 0),),
+        )
+
+        with patch.object(
+            video_render_module, "compute_speaker_framing", return_value=confident
+        ):
+            render_clip(clip.id)
+
+        db_session.refresh(clip)
+        assert clip.status == ClipStatus.ready
+        assert clip.framing_score == 1.0
+        # Refined weights: 0.4*80 + 0.35*100 + 0.25*100 (1.0 scaled to 100).
+        assert clip.virality_score == 92.0
+        assert "framing" in clip.virality_reason.lower()
+
+    def test_speaker_focus_reuses_the_frame_9x16_result_instead_of_calling_twice(
+        self, db_session: Session, test_user: User
+    ) -> None:
+        """The default framing_mode (speaker_focus) already calls
+        compute_speaker_framing once inside _frame_9x16 -- the refinement
+        step must reuse that return value, not call it again."""
+
+        from app.services.reframe import SpeakerFraming, SpeakerWindow
+
+        clip = self._make_ready_clip(
+            db_session, test_user, framing_mode=ClipFraming.speaker_focus
+        )
+        confident = SpeakerFraming(
+            source_width=640,
+            source_height=360,
+            crop_width=200,
+            crop_height=360,
+            windows=(SpeakerWindow(0.0, 0, 0),),
+        )
+
+        with patch.object(
+            video_render_module,
+            "compute_speaker_framing",
+            return_value=confident,
+        ) as mock_compute:
+            render_clip(clip.id)
+
+        db_session.refresh(clip)
+        assert clip.status == ClipStatus.ready
+        assert clip.framing_score == 1.0
+        assert clip.virality_score == 92.0
+        assert mock_compute.call_count == 1
+
+    def test_render_with_no_confident_subject_scores_framing_zero(
+        self, db_session: Session, test_user: User
+    ) -> None:
+        clip = self._make_ready_clip(
+            db_session, test_user, framing_mode=ClipFraming.fit
+        )
+
+        with patch.object(
+            video_render_module, "compute_speaker_framing", return_value=None
+        ):
+            render_clip(clip.id)
+
+        db_session.refresh(clip)
+        assert clip.status == ClipStatus.ready
+        assert clip.framing_score == 0.0
+        # 0.4*80 + 0.35*100 + 0.25*0
+        assert clip.virality_score == 67.0
+
+    def test_failed_render_leaves_the_prior_partial_score_untouched(
+        self, db_session: Session, test_user: User
+    ) -> None:
+        """A render that ends in `failed` must not touch the clip's score
+        fields at all -- only a successful `ready` transition refines it."""
+
+        project = VideoProject(
+            user_id=test_user.id,
+            title="Failing project",
+            source_type=SourceType.upload,
+            status=VideoProjectStatus.ready,
+            # No source_file_path at all -- guaranteed to hit the earliest
+            # failure branch in _render_and_persist.
+        )
+        db_session.add(project)
+        db_session.commit()
+        db_session.refresh(project)
+
+        clip = Clip(
+            video_project_id=project.id,
+            user_id=test_user.id,
+            title="Clip",
+            start_time=0.0,
+            end_time=2.0,
+            order_index=0,
+            status=ClipStatus.rendering,
+            hook_score=80.0,
+            completeness_score=100.0,
+            virality_score=90.0,
+            virality_reason="Strong hook; strong sentence completeness.",
+        )
+        db_session.add(clip)
+        db_session.commit()
+        db_session.refresh(clip)
+
+        render_clip(clip.id)
+
+        db_session.refresh(clip)
+        assert clip.status == ClipStatus.failed
+        assert clip.framing_score is None
+        assert clip.hook_score == 80.0
+        assert clip.completeness_score == 100.0
+        assert clip.virality_score == 90.0
+        assert clip.virality_reason == "Strong hook; strong sentence completeness."
+
+    def test_scoring_failure_after_a_successful_render_does_not_mark_it_failed(
+        self, db_session: Session, test_user: User
+    ) -> None:
+        """QA Bug 1: for dynamic_blur/fit clips, compute_speaker_framing now
+        runs *after* the ffmpeg render succeeds. If it raises, the render's
+        own success (file written, thumbnail extracted) must stand -- the
+        clip stays `ready` with its prior partial score untouched, not
+        `failed`."""
+
+        clip = self._make_ready_clip(
+            db_session, test_user, framing_mode=ClipFraming.dynamic_blur
+        )
+
+        with patch.object(
+            video_render_module,
+            "compute_speaker_framing",
+            side_effect=RuntimeError("boom"),
+        ):
+            render_clip(clip.id)
+
+        db_session.refresh(clip)
+        assert clip.status == ClipStatus.ready
+        assert clip.video_file_path is not None
+        assert clip.thumbnail_path is not None
+        # Scoring never ran -- prior partial score is left exactly as it was.
+        assert clip.framing_score is None
+        assert clip.hook_score == 80.0
+        assert clip.completeness_score == 100.0
+        assert clip.virality_score == 90.0
+        assert clip.virality_reason == "Strong hook; strong sentence completeness."

@@ -74,10 +74,18 @@ export interface Clip {
   video_file_path: string | null;
   thumbnail_path: string | null;
   broll_assets?: BrollAsset[];
-  virality_score?: number;
-  virality_reason?: string;
-  hook_score?: number;
-  engagement_score?: number;
+  /** 0-100, server-computed. `null` = legacy clip not yet (re)scored. */
+  virality_score: number | null;
+  /** Short, clip-specific explanation built from the actual sub-scores. */
+  virality_reason: string | null;
+  hook_score: number | null;
+  completeness_score: number | null;
+  /**
+   * Pass/fail speaker-framing signal, not a percentage: `null` = not yet
+   * checked, `0` = checked with no confident subject found, `1` = checked
+   * and confirmed.
+   */
+  framing_score: number | null;
   /** Which caption look burns into the export. */
   caption_style: CaptionStylePreset;
   created_at: string;

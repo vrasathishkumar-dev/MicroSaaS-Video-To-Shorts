@@ -18,6 +18,11 @@ const baseClip: Clip = {
   caption_style: 'hormozi',
   video_file_path: null,
   thumbnail_path: null,
+  virality_score: null,
+  virality_reason: null,
+  hook_score: null,
+  completeness_score: null,
+  framing_score: null,
   created_at: '2024-01-01T00:00:00Z',
   updated_at: '2024-01-01T00:00:00Z',
 };
@@ -78,5 +83,24 @@ describe('ClipCard', () => {
     await expect(
       user.click(screen.getByRole('button', { name: /delete best moment/i })),
     ).resolves.not.toThrow();
+  });
+
+  it('renders "Not yet scored" for a legacy clip with a null virality_score', () => {
+    renderClipCard({ clip: { ...baseClip, virality_score: null } });
+    expect(screen.getByText('Not yet scored')).toBeInTheDocument();
+  });
+
+  it('renders the sub-50 "Needs Manual Review" band for a weak real score', () => {
+    renderClipCard({
+      clip: {
+        ...baseClip,
+        virality_score: 32,
+        hook_score: 20,
+        completeness_score: 40,
+        framing_score: 0,
+        virality_reason: 'Weak hook and a mid-sentence cut.',
+      },
+    });
+    expect(screen.getByText('Score 32/100')).toBeInTheDocument();
   });
 });

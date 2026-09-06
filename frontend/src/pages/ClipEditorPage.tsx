@@ -29,7 +29,7 @@ import {
   activeSplitSection,
   speakerFocusStyle,
 } from '@/lib/framing';
-import { computeViralityInsights } from '@/lib/virality';
+import { clipToViralityInsights } from '@/lib/virality';
 import { cn } from '@/lib/utils';
 import {
   getClip,
@@ -317,10 +317,7 @@ export function ClipEditorPage() {
   }
 
   const duration = Math.max(0, clip.end_time - clip.start_time);
-  const virality = computeViralityInsights(
-    clip.caption_text || clip.title,
-    duration,
-  );
+  const virality = clipToViralityInsights(clip);
 
   // Determine relative time for word-synced B-roll overlay
   const relativeTime = clip.status === 'ready' ? currentTime : Math.max(0, currentTime - clip.start_time);

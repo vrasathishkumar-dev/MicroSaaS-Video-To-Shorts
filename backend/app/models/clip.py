@@ -87,6 +87,22 @@ class Clip(Base, TimestampMixin):
     video_file_path: Mapped[str | None] = mapped_column(String(1024), nullable=True)
     thumbnail_path: Mapped[str | None] = mapped_column(String(1024), nullable=True)
 
+    # Server-computed virality scoring (see backlog: "Clip virality score is
+    # fake"). NULL is a real, distinct state -- never coerced to 0 -- so no
+    # server_default: legacy pre-migration rows stay NULL until the scoring
+    # service (backend-agent's work, not this model) populates them on the
+    # clip's next edit or render. `framing_score` is nullable *and* a
+    # pass/fail signal, not a gradient: null = not yet checked (draft, or a
+    # failed render left it stale/invalidated), 1.0 = compute_speaker_framing
+    # returned a SpeakerFraming, 0.0 = it returned None (checked, no
+    # confident subject found). See handoff for how this maps to the
+    # Designer's "Confirmed / Not confident / Not checked" three states.
+    virality_score: Mapped[float | None] = mapped_column(Float, nullable=True)
+    hook_score: Mapped[float | None] = mapped_column(Float, nullable=True)
+    completeness_score: Mapped[float | None] = mapped_column(Float, nullable=True)
+    framing_score: Mapped[float | None] = mapped_column(Float, nullable=True)
+    virality_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+
     # Relationships
     video_project: Mapped[VideoProject] = relationship("VideoProject", back_populates="clips")
     user: Mapped[User] = relationship("User", back_populates="clips")

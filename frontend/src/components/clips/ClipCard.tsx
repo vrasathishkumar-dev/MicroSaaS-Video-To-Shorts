@@ -2,7 +2,7 @@ import { motion } from 'framer-motion';
 import { Clock, Trash2, Play, Download } from 'lucide-react';
 import { Link } from 'react-router-dom';
 import { cn } from '@/lib/utils';
-import { computeViralityInsights } from '@/lib/virality';
+import { clipToViralityInsights } from '@/lib/virality';
 import { getClipThumbnailUrl } from '@/services/clipService';
 import { ViralityScoreBadge } from '@/components/clips/ViralityScoreBadge';
 import type { Clip, ClipStatus } from '@/types';
@@ -30,7 +30,7 @@ function formatDuration(seconds: number): string {
 export function ClipCard({ clip, onDelete, className }: ClipCardProps) {
   const rawDuration = clip.end_time - clip.start_time;
   const duration = formatDuration(rawDuration);
-  const virality = computeViralityInsights(clip.caption_text || clip.title, rawDuration);
+  const virality = clipToViralityInsights(clip);
 
   return (
     <motion.div

@@ -22,7 +22,7 @@ from app.models.video_project import (
     VideoProjectStatus,
 )
 from app.schemas.clip import ClipUpdateRequest
-from app.services.highlight_detection import hook_score
+from app.services.highlight_detection import _payoff_score, hook_score
 
 _MAX_AUTO_TITLE_LEN = 60
 
@@ -297,6 +297,269 @@ def _clamp_start_to_boundary(
     return min_start
 
 
+# ---------------------------------------------------------------------------
+# Virality scoring (see backlog: "Clip virality score is fake")
+# ---------------------------------------------------------------------------
+#
+# Two passes: `score_clip_partial` (hook + completeness, text/pattern
+# matching only -- cheap enough to run inline in a request handler) and
+# `refine_clip_with_framing` (adds the speaker-framing signal, only
+# available from the render pipeline -- see video_render.py). A clip's
+# `framing_score` being `None` *is* the marker that only the partial pass
+# has run; there is no separate status flag for it (see Clip model
+# docstring / Database handoff for the exact null/0.0/1.0 encoding).
+
+# A boundary compared exactly would spuriously fail against a value that
+# only differs by float rounding (clip_service itself stores start_time/
+# end_time via round(..., 2), and a user-supplied PUT edit is arbitrary
+# client-side float precision).
+_BOUNDARY_MATCH_TOLERANCE_SECONDS = 0.05
+
+# Hook sub-score: how much the opening line vs. the rest of the window
+# drives the number. The opening two seconds decide whether anyone stays
+# (see highlight_detection's own module docstring), so it carries the
+# majority share; the window's insight-keyword density still counts for
+# something -- a strong opener that trails into filler shouldn't score the
+# same as one that follows through.
+_HOOK_OPENING_WEIGHT = 0.6
+_HOOK_PAYOFF_WEIGHT = 0.4
+
+# Completeness tiers -- not binary, so two "mostly clean" clips don't
+# collapse to the same score as a perfectly clean one.
+_COMPLETENESS_BOTH_CLEAN = 100.0
+_COMPLETENESS_ONE_CLEAN = 55.0
+# Not 0: a transcript with no terminal punctuation anywhere (e.g. certain
+# auto-caption sources) shouldn't zero out a clip that may otherwise be
+# fine on hook/framing -- see story's Bounds section.
+_COMPLETENESS_NEITHER_CLEAN = 20.0
+
+# Composite weights, refined pass (framing available). Framing is a binary
+# pass/fail signal (see Clip.framing_score docstring), not a graded one, so
+# it refines the score rather than dominating it -- hook + completeness
+# (0.75 combined) still outweigh it, per the story's own bound.
+_HOOK_WEIGHT_REFINED = 0.4
+_COMPLETENESS_WEIGHT_REFINED = 0.35
+_FRAMING_WEIGHT_REFINED = 0.25
+
+# Composite weights, partial pass (framing not yet available). Not a
+# separately-invented pair -- the story requires these to be the refined
+# weights renormalized to 1.0 over just hook+completeness, so they're
+# derived here rather than hand-picked, and can't silently drift out of
+# that ratio if the refined weights above are ever retuned.
+_HOOK_WEIGHT_PARTIAL = _HOOK_WEIGHT_REFINED / (
+    _HOOK_WEIGHT_REFINED + _COMPLETENESS_WEIGHT_REFINED
+)
+_COMPLETENESS_WEIGHT_PARTIAL = 1.0 - _HOOK_WEIGHT_PARTIAL
+
+# virality_reason thresholds: below/at-or-above these, a sub-signal is
+# named explicitly rather than folded silently into the number. Hook is a
+# continuous 0-100 score; completeness only ever lands on one of the three
+# tiers above, so its thresholds just key off those tier values directly.
+_HOOK_WEAK_THRESHOLD = 35.0
+_HOOK_STRONG_THRESHOLD = 70.0
+
+# Mirrors frontend/src/lib/virality.ts REVIEW_THRESHOLD -- below this, a clip
+# is banded "Needs Manual Review" in the UI. `_virality_reason` must never
+# produce reassuring/neutral language for a clip that lands below this, even
+# when no individual sub-score crossed its own weak threshold above (see
+# QA's exact repro: hook in [35, 45.6), completeness=55).
+_REVIEW_THRESHOLD = 50.0
+
+
+def _is_terminal_end(end_time: float, segments: list[TranscriptSegment]) -> bool:
+    """Whether `end_time` lands on a segment's own sentence-terminal end.
+
+    Same check `_extend_to_sentence_boundary` uses to decide whether `end`
+    is already clean -- reused rather than reimplemented.
+    """
+
+    return any(
+        abs(segment.end_time - end_time) <= _BOUNDARY_MATCH_TOLERANCE_SECONDS
+        and segment.text.strip().endswith((".", "!", "?"))
+        for segment in segments
+    )
+
+
+def _is_terminal_start(start_time: float, segments: list[TranscriptSegment]) -> bool:
+    """Whether `start_time` opens on a sentence boundary: the transcript's
+    first segment, or right after a segment that ended in terminal
+    punctuation.
+
+    Same `terminal_starts` rule `_extend_to_sentence_boundary`/
+    `_clamp_start_to_boundary` use -- reused rather than reimplemented.
+    """
+
+    if not segments:
+        return False
+    ordered = sorted(segments, key=lambda s: s.start_time)
+    terminal_starts = [
+        seg.start_time
+        for i, seg in enumerate(ordered)
+        if i == 0 or ordered[i - 1].text.strip().endswith((".", "!", "?"))
+    ]
+    return any(
+        abs(candidate - start_time) <= _BOUNDARY_MATCH_TOLERANCE_SECONDS
+        for candidate in terminal_starts
+    )
+
+
+def _completeness_subscore(
+    start_time: float, end_time: float, segments: list[TranscriptSegment]
+) -> float:
+    """0-100, in three tiers: both edges on a real sentence boundary, one
+    edge, or neither -- evaluated against the clip's *current* edges, not
+    assumed true from generation time (drag-trim/per-sentence Start/End
+    buttons can move either edge after a clip is created)."""
+
+    clean_start = _is_terminal_start(start_time, segments)
+    clean_end = _is_terminal_end(end_time, segments)
+    if clean_start and clean_end:
+        return _COMPLETENESS_BOTH_CLEAN
+    if clean_start or clean_end:
+        return _COMPLETENESS_ONE_CLEAN
+    return _COMPLETENESS_NEITHER_CLEAN
+
+
+def _opening_text(
+    start_time: float, end_time: float, segments: list[TranscriptSegment]
+) -> str:
+    """The clip's first in-window transcript segment's raw text -- the line
+    a scroller actually hears first, which is what hook_score is meant to
+    judge (not the clip's title)."""
+
+    opening = [
+        segment
+        for segment in sorted(segments, key=lambda s: s.start_time)
+        if start_time <= segment.start_time < end_time
+    ]
+    return opening[0].text.strip() if opening else ""
+
+
+def _hook_subscore(
+    start_time: float, end_time: float, segments: list[TranscriptSegment]
+) -> float:
+    """0-100: the opening line's hook strength combined with the full
+    in-window transcript's insight-keyword density."""
+
+    opening_text = _opening_text(start_time, end_time, segments)
+    window_text = " ".join(_sentences_in(segments, start_time, end_time))
+    combined = (
+        _HOOK_OPENING_WEIGHT * hook_score(opening_text)
+        + _HOOK_PAYOFF_WEIGHT * _payoff_score(window_text)
+    )
+    return round(min(max(combined, 0.0), 1.0) * 100.0, 2)
+
+
+def _composite_virality_score(
+    hook: float, completeness: float, framing: float | None
+) -> float:
+    """Weighted sum of whichever sub-scores are available, renormalized to
+    1.0 over just those -- the partial-pass weights are not a separately
+    invented pair, they're the refined weights' hook/completeness ratio."""
+
+    if framing is None:
+        score = (
+            _HOOK_WEIGHT_PARTIAL * hook + _COMPLETENESS_WEIGHT_PARTIAL * completeness
+        )
+    else:
+        score = (
+            _HOOK_WEIGHT_REFINED * hook
+            + _COMPLETENESS_WEIGHT_REFINED * completeness
+            + _FRAMING_WEIGHT_REFINED * framing
+        )
+    return round(min(max(score, 0.0), 100.0), 2)
+
+
+def _virality_reason(hook: float, completeness: float, framing: float | None) -> str:
+    """Named from the clip's actual sub-scores, not selected from a fixed
+    per-band template -- must differ between clips with different
+    sub-scores."""
+
+    weak: list[str] = []
+    strong: list[str] = []
+
+    if hook < _HOOK_WEAK_THRESHOLD:
+        weak.append("hook")
+    elif hook >= _HOOK_STRONG_THRESHOLD:
+        strong.append("hook")
+
+    if completeness <= _COMPLETENESS_NEITHER_CLEAN:
+        weak.append("sentence completeness")
+    elif completeness >= _COMPLETENESS_BOTH_CLEAN:
+        strong.append("sentence completeness")
+
+    if framing is not None:
+        if framing <= 0.0:
+            weak.append("speaker framing")
+        elif framing >= 100.0:
+            strong.append("speaker framing")
+
+    parts: list[str] = []
+    if strong:
+        parts.append(f"Strong {', '.join(strong)}")
+    if weak:
+        parts.append(f"Weak {', '.join(weak)} -- review before publishing")
+    if not parts:
+        composite = _composite_virality_score(hook, completeness, framing)
+        if composite < _REVIEW_THRESHOLD:
+            # No individual sub-score crossed its own weak threshold, yet the
+            # composite still lands in the "Needs Manual Review" band -- name
+            # whichever sub-score(s) are lowest relative to their own scale
+            # rather than falling through to "middling" language that reads
+            # as reassuring next to that label.
+            subscores = [("hook", hook), ("sentence completeness", completeness)]
+            if framing is not None:
+                subscores.append(("speaker framing", framing))
+            lowest_value = min(value for _, value in subscores)
+            lowest = [name for name, value in subscores if value == lowest_value]
+            return f"Below-average {', '.join(lowest)} -- review before publishing."
+        return "Middling signals across the board -- no standout strength or weakness."
+    return "; ".join(parts) + "."
+
+
+def score_clip_partial(clip: Clip, segments: list[TranscriptSegment]) -> None:
+    """Compute and set `hook_score`/`completeness_score`/`virality_score`/
+    `virality_reason` from `clip`'s *current* start_time/end_time.
+
+    Does not touch `framing_score` -- callers that are invalidating a stale
+    framing result (e.g. update_clip after a boundary edit) must null it
+    themselves; callers creating a brand-new draft clip get a null
+    `framing_score` for free (no default set on that column).
+    """
+
+    hook = _hook_subscore(clip.start_time, clip.end_time, segments)
+    completeness = _completeness_subscore(clip.start_time, clip.end_time, segments)
+    clip.hook_score = hook
+    clip.completeness_score = completeness
+    clip.virality_score = _composite_virality_score(hook, completeness, None)
+    clip.virality_reason = _virality_reason(hook, completeness, None)
+
+
+def refine_clip_with_framing(clip: Clip, framing_score: float) -> None:
+    """Add the framing signal to an already partially-scored clip and
+    recompute `virality_score`/`virality_reason` from it -- called once a
+    render succeeds, regardless of `framing_mode` (see video_render.py).
+
+    `framing_score` is the raw pass/fail signal stored on `Clip` -- exactly
+    `0.0` or `1.0`, per the Database handoff's encoding (never a gradient).
+    It's scaled to 0-100 only for the composite formula/reason, which share
+    their scale with hook/completeness.
+    """
+
+    hook = clip.hook_score or 0.0
+    completeness = clip.completeness_score or 0.0
+    framing_subscore = framing_score * 100.0
+    # Computed into locals and assigned only once every value is known, so a
+    # mid-computation exception (from either call below) can never leave the
+    # clip with a fresh virality_score paired with a now-stale reason (or
+    # vice versa) -- see video_render.py's own try/except around this call.
+    score = _composite_virality_score(hook, completeness, framing_subscore)
+    reason = _virality_reason(hook, completeness, framing_subscore)
+    clip.framing_score = framing_score
+    clip.virality_score = score
+    clip.virality_reason = reason
+
+
 def _fallback_title_source(
     segments: list[TranscriptSegment],
     start: float,
@@ -514,6 +777,10 @@ def create_clips_from_highlights(
             framing_mode=project.framing_mode,
             caption_style=project.caption_style,
         )
+        # Partial score (hook + completeness only) -- framing isn't
+        # available until this clip renders (see video_render.py), so
+        # framing_score stays null (the column's own default).
+        score_clip_partial(clip, all_segments)
         db.add(clip)
         clips.append(clip)
 
@@ -566,11 +833,30 @@ def list_clips(
 
 
 def update_clip(db: Session, clip: Clip, payload: ClipUpdateRequest) -> Clip:
-    """Apply a partial update to a clip's editable fields."""
+    """Apply a partial update to a clip's editable fields.
+
+    A `start_time`/`end_time` change recomputes the partial (hook +
+    completeness) score against the new boundaries and invalidates
+    (`null`s) any previously-computed `framing_score` -- even if the clip
+    was already `ready` -- since a framing result computed for the old
+    boundaries no longer describes the new ones (see backlog: "Clip
+    virality score is fake").
+    """
 
     updates = payload.model_dump(exclude_unset=True)
+    boundaries_changed = "start_time" in updates or "end_time" in updates
     for field, value in updates.items():
         setattr(clip, field, value)
+
+    if boundaries_changed:
+        segments = (
+            db.query(TranscriptSegment)
+            .filter(TranscriptSegment.video_project_id == clip.video_project_id)
+            .order_by(TranscriptSegment.start_time.asc())
+            .all()
+        )
+        score_clip_partial(clip, segments)
+        clip.framing_score = None
 
     db.commit()
     db.refresh(clip)

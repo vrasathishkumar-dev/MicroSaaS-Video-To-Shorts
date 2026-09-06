@@ -25,6 +25,11 @@ class ClipResponse(BaseModel):
     caption_style: ClipCaptionStyle
     video_file_path: str | None
     thumbnail_path: str | None
+    virality_score: float | None
+    hook_score: float | None
+    completeness_score: float | None
+    framing_score: float | None
+    virality_reason: str | None
     broll_assets: list[BrollAssetResponse] = Field(default_factory=list)
     created_at: datetime
     updated_at: datetime

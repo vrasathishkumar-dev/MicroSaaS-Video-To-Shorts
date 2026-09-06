@@ -93,6 +93,7 @@ from app.models.clip import Clip, ClipCaptionStyle, ClipFraming, ClipStatus
 from app.models.transcript_segment import TranscriptSegment
 from app.models.video_project import VideoProject
 from app.services.caption_render import render_caption_images
+from app.services.clip_service import refine_clip_with_framing, score_clip_partial
 from app.services.reframe import (
     SpeakerFraming,
     compute_speaker_framing,
@@ -258,9 +259,11 @@ def _render_and_persist(session: Session, clip: Clip) -> None:
         duration=duration,
     )
 
+    framing_mode_str = _framing_mode(clip)
+
     try:
         with tempfile.TemporaryDirectory(prefix="render_") as tmp_dir:
-            _run_ffmpeg(
+            speaker_framing_result = _run_ffmpeg(
                 source_path=source_path,
                 start_time=clip.start_time,
                 duration=duration,
@@ -268,7 +271,7 @@ def _render_and_persist(session: Session, clip: Clip) -> None:
                 broll_assets=list(clip.broll_assets),
                 output_path=output_path,
                 tmp_dir=Path(tmp_dir),
-                framing=_framing_mode(clip),
+                framing=framing_mode_str,
                 caption_style=clip.caption_style,
             )
     except FileNotFoundError:
@@ -290,6 +293,44 @@ def _render_and_persist(session: Session, clip: Clip) -> None:
         clip.status = ClipStatus.failed
         session.commit()
         return
+
+    # Refine the virality score with the framing signal on every successful
+    # render, regardless of framing_mode -- compute_speaker_framing is
+    # cached per (file, range, target size) per its own docstring, so this
+    # is one cheap extra call for dynamic_blur/fit clips, not a new
+    # analysis pass. speaker_focus clips already ran it above inside
+    # _frame_9x16 -- reuse that result instead of calling it twice.
+    #
+    # This runs *after* the file/thumbnail/status writes below it are
+    # decided, and is wrapped in its own try/except: the render itself
+    # already succeeded (file written, thumbnail extracted), so a scoring
+    # failure here must never flip a good render to `failed` -- it just
+    # leaves the clip's prior (possibly partial, possibly null) score as-is.
+    try:
+        if framing_mode_str == "auto":
+            framing_result = speaker_framing_result
+        else:
+            framing_result = compute_speaker_framing(
+                source_path,
+                clip.start_time,
+                duration,
+                settings.RENDER_WIDTH,
+                settings.RENDER_HEIGHT,
+            )
+        framing_score = 1.0 if framing_result is not None else 0.0
+
+        if clip.hook_score is None or clip.completeness_score is None:
+            # A legacy pre-migration clip that has never been scored -- a
+            # successful re-render is one of the two triggers the story allows
+            # for backfilling it (the other is a PUT /clips/{id} edit).
+            score_clip_partial(clip, transcript_segments)
+        refine_clip_with_framing(clip, framing_score)
+    except Exception:
+        logger.exception(
+            "render_clip: clip id=%s framing/virality scoring failed after a "
+            "successful render; leaving its prior score untouched",
+            clip.id,
+        )
 
     clip.video_file_path = str(output_path)
     thumbnail_path = _extract_thumbnail(output_path, duration)
@@ -668,12 +709,18 @@ def _frame_9x16(
     start_time: float,
     duration: float,
     framing: str | None = None,
-) -> Any:
+) -> tuple[Any, SpeakerFraming | None]:
     """Convert the source frame to the 9:16 canvas.
 
     `framing` is the clip's own choice from the editor, already mapped to
     this module's vocabulary by `_framing_mode`; without one it falls back
     to the RENDER_FRAMING default.
+
+    Returns `(video_stream, speaker_framing)` -- the second element is the
+    `compute_speaker_framing` result when this ran the `auto` path (`None`
+    if no confident subject was found, or if `framing` wasn't `auto` at
+    all), so `_render_and_persist` can reuse it for `Clip.framing_score`
+    instead of calling `compute_speaker_framing` a second time.
     """
 
     width = settings.RENDER_WIDTH
@@ -681,13 +728,15 @@ def _frame_9x16(
     framing = (framing or settings.RENDER_FRAMING).lower()
     filters = _available_filters()
 
+    speaker: SpeakerFraming | None = None
     if framing == "auto":
         speaker = compute_speaker_framing(
             source_path, start_time, duration, width, height
         )
         if speaker is not None:
-            return _speaker_framed(
-                main_input, speaker, width, height, duration, filters
+            return (
+                _speaker_framed(main_input, speaker, width, height, duration, filters),
+                speaker,
             )
         # No confident subject: the blurred fill shows the whole frame,
         # which is the safe answer when we don't know where to look.
@@ -699,7 +748,8 @@ def _frame_9x16(
                 "scale", width, height, force_original_aspect_ratio="increase"
             )
             .filter("crop", width, height)
-            .filter("setsar", 1)
+            .filter("setsar", 1),
+            speaker,
         )
 
     if framing == "blur" and "gblur" in filters:
@@ -714,9 +764,12 @@ def _frame_9x16(
         foreground = split[1].filter(
             "scale", width, height, force_original_aspect_ratio="decrease"
         )
-        return ffmpeg.overlay(
-            background, foreground, x="(W-w)/2", y="(H-h)/2"
-        ).filter("setsar", 1)
+        return (
+            ffmpeg.overlay(
+                background, foreground, x="(W-w)/2", y="(H-h)/2"
+            ).filter("setsar", 1),
+            speaker,
+        )
 
     if framing == "blur":
         logger.warning(
@@ -730,7 +783,8 @@ def _frame_9x16(
             "scale", width, height, force_original_aspect_ratio="decrease"
         )
         .filter("pad", width, height, "(ow-iw)/2", "(oh-ih)/2", color="black")
-        .filter("setsar", 1)
+        .filter("setsar", 1),
+        speaker,
     )
 
 
@@ -961,8 +1015,12 @@ def _run_ffmpeg(
     tmp_dir: Path,
     framing: str | None = None,
     caption_style: ClipCaptionStyle | None = None,
-) -> None:
+) -> SpeakerFraming | None:
     """Build and execute the ffmpeg filter graph for one clip.
+
+    Returns the `compute_speaker_framing` result computed along the way
+    (see `_frame_9x16`) -- `None` if `framing` wasn't `auto`, or no
+    confident subject was found.
 
     Raises FileNotFoundError if the ffmpeg binary is missing, or
     ffmpeg.Error if ffmpeg runs but exits non-zero.
@@ -972,7 +1030,7 @@ def _run_ffmpeg(
     # 2-hour broadcast doesn't have to be decoded up to the clip's start.
     main_input = ffmpeg.input(source_path, ss=start_time, t=duration)
 
-    video_stream = _frame_9x16(
+    video_stream, speaker_framing = _frame_9x16(
         main_input,
         source_path=source_path,
         start_time=start_time,
@@ -984,6 +1042,8 @@ def _run_ffmpeg(
     video_stream = _apply_captions(video_stream, captions, tmp_dir, caption_style)
 
     _encode(video_stream, main_input, output_path, source_path)
+
+    return speaker_framing
 
 
 def _video_output_kwargs() -> dict[str, Any]:
