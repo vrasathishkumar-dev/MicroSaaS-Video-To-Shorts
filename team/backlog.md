@@ -22,6 +22,16 @@ founder approves it.)_
 
 ---
 
+## Active
+
+
+
+_(Approved stories move here as they move through Designer → Developer →
+Tester → DevOps → SEO/GEO/AEO → Marketer, each appending a subsection below the
+story.)_
+
+---
+
 ### Clip virality score is fake — needs a real, server-computed score before the founder trusts it to skip manual review
 
 **Status:** deployed (2026-09-06)
@@ -1423,10 +1433,12 @@ index (`git write-tree` + `git commit-tree`, parented on `HEAD`, never
 touching `main`/HEAD/the working tree/the index), checked it out into a
 throwaway `git worktree add --detach`, and ran the full suite there:
 - `pytest tests -v` (backend, isolated worktree) → **266 passed**, 0
-  failed. (Fewer than the 277 the Fix/QA-re-verification subsections
+  failed. Fewer than the 277 the Fix/QA-re-verification subsections
   reported against the full mixed working tree -- expected, since this
-  isolated tree excludes B-roll's own new tests, e.g. the 4-case
-  `test_render_composites_broll_at_every_placement` parametrize.)
+  isolated tree excludes all of B-roll's own uncommitted test additions
+  (`test_broll.py`, `test_reframe.py`, and the 4-case
+  `test_render_composites_broll_at_every_placement` parametrize in
+  `test_video_render.py`), not just the last one.
 - `ruff check` on the story's touched backend files → clean except one
   pre-existing `I001` (import-sort) finding in `app/schemas/clip.py` that
   reproduces identically against `git show HEAD:backend/app/schemas/clip.py`
@@ -1445,11 +1457,28 @@ score columns, no data backfill (existing rows correctly stay `NULL` per
 the story's own design). Confirmed via `alembic current`/`alembic heads`
 against the dev Postgres DB that this revision is already the applied head
 -- it was run earlier this session (per the Backend subsection's own
-validation notes) and needs no further action here. It sits linearly on top
-of the two uncommitted B-roll revisions (`e276d71b9110`, `2c98d61a2ef4`),
-which are also already applied to this same dev DB (a separate, prior
-action, not part of this deploy) but intentionally not committed to git
-yet, per that story's own DevOps note.
+validation notes) and needs no further action **on this dev DB**.
+
+**Blocking finding, caught after the commit above (flagging rather than
+silently living with it):** this revision's own `down_revision =
+"e276d71b9110"` -- one of the two uncommitted B-roll migrations, not a file
+in git. `alembic heads` reads a single head locally only because this dev
+DB's working tree still has both uncommitted B-roll migration files on
+disk; a **fresh clone of `main` right now does not** -- running `alembic
+upgrade head` there fails with "Can't locate revision identified by
+'e276d71b9110'". The backend test suite can't catch this: it builds its
+schema from the SQLAlchemy models directly, never walks the Alembic chain,
+which is exactly why 266/266 passed against a broken chain. Deliberately
+**not** repointing `down_revision` to paper over this -- that would edit
+the B-roll story's own migration chain from inside this commit, and would
+desync once B-roll's real migrations are committed pointing at this same
+parent. The correct fix is sequencing, not a patch: **the two B-roll
+Alembic revisions (`2c98d61a2ef4`, `e276d71b9110`) must be committed to
+git -- as part of that story's own deploy -- before `alembic upgrade head`
+will succeed for this story on any host that isn't already, byte-for-byte,
+at this exact dev DB's applied state.** In practice, B-roll's deploy is now
+a prerequisite for this one everywhere except this sandbox. Founder should
+know this before any real (non-sandbox) host is pointed at this commit.
 
 **Deploy mechanism (this project's actual current state):** no CD/build-push
 job exists -- `.github/workflows/ci.yml` only lints and tests on push to
@@ -1457,13 +1486,14 @@ job exists -- `.github/workflows/ci.yml` only lints and tests on push to
 host. At this project's stage, **the deploy artifact is the commit to
 `main` itself** (same finding as the two prior DevOps notes above). This
 sandbox still has no `docker`/`docker-compose` binary, so no container was
-built or restarted from here. Nothing about this change needs anything
-beyond the deploy host's normal `git pull` + `alembic upgrade head` (a
-no-op there too, once that host's DB is on the same revision) +
+built or restarted from here. Beyond the deploy host's normal `git pull` +
 `docker compose build api worker web` + `docker compose up -d` for the
-`backend`/worker/frontend images -- both backend and frontend files changed,
-so all three services need a rebuild this time (unlike the previous
-clip-boundary-fix deploy, which was backend-only).
+`backend`/worker/frontend images (both backend and frontend files changed,
+so all three services need a rebuild this time, unlike the previous
+clip-boundary-fix deploy which was backend-only) -- **`alembic upgrade
+head` will fail on any host that isn't already at this exact revision**,
+per the migration finding above, until B-roll's two revisions are also
+committed.
 **Not pushed to the remote** -- this task did not request a push, so `main`
 on the remote is unchanged and CI has not run against this commit.
 
@@ -1474,21 +1504,36 @@ on the remote is unchanged and CI has not run against this commit.
    `team/backlog.md` hunk carries this story's own full Design/Database/
    Backend/Frontend/QA/Fix/QA-re-verification/Deployment history (and rides
    along with whatever else was in `backlog.md` at commit time) that a
-   revert would delete. Instead, revert only the code paths: restore each
-   of the 13 non-`backlog.md` files listed above to its state from the
-   commit immediately before this one (`git checkout <parent-SHA> --
-   <path>...` for each), then commit that. Since several of those files
-   were only partially staged this round, restoring the whole file to the
-   parent SHA is safe and exact -- the parent SHA predates all of this
-   story's changes to every one of those files.
+   revert would delete. Instead, revert only the code paths -- 15
+   non-`backlog.md` files, not 13, split by whether they existed before this
+   commit:
+   - 12 pre-existing files: restore each to its state from the commit
+     immediately before this one (checkout `<parent-SHA>` for the path,
+     for each) -- `backend/app/models/clip.py`, `backend/app/schemas/clip.py`,
+     `backend/app/services/clip_service.py`,
+     `backend/app/services/video_render.py`, `backend/tests/test_clips.py`,
+     `backend/tests/test_video_render.py`,
+     `frontend/src/components/clips/ClipCard.tsx`,
+     `frontend/src/components/clips/ViralityScoreBadge.tsx`,
+     `frontend/src/components/clips/__tests__/ClipCard.test.tsx`,
+     `frontend/src/lib/virality.ts`, `frontend/src/pages/ClipEditorPage.tsx`,
+     `frontend/src/types/index.ts` -- safe and exact, since the parent SHA
+     predates all of this story's changes to every one of them.
+   - 3 files this commit created (the parent SHA has no such path, so a
+     path-scoped checkout of these against the parent SHA errors): remove
+     them instead -- `backend/alembic/versions/9f3c1a7d5e2b_clip_virality_scores.py`,
+     `frontend/src/lib/__tests__/virality.test.ts`,
+     `frontend/src/components/clips/__tests__/ViralityScoreBadge.test.tsx`.
+   Then commit both sets of changes together.
 3. `alembic downgrade -1` against the dev DB drops the 5 score columns if a
    full rollback is truly needed -- but since they're all nullable with no
    `NOT NULL`/default constraint and no other migration depends on them,
    leaving the column added (even after reverting the code that populates
-   it) is also a safe, less disruptive partial rollback; note the two
-   uncommitted B-roll migrations sit on top of this one in the chain, so a
-   downgrade here would need coordinating with that story's own (still
-   pending) deploy.
+   it) is also a safe, less disruptive partial rollback. Per the migration
+   finding above, this revision is the chain's head with the two
+   uncommitted B-roll migrations as its *ancestors*, not on top of it --
+   `alembic downgrade -1` here is clean and self-contained, dropping only
+   this revision's own columns with nothing else to coordinate.
 4. No feature flag exists for this change (unconditional logic in
    `create_clips_from_highlights()`'s clip-creation path and the render
    pipeline) -- revert is the only toggle.
@@ -1503,16 +1548,6 @@ still be worth a short "your clip scores are now real, server-verified
 signals -- not a placeholder" changelog/trust note for existing users who've
 seen the badge before; flagging for their own call on whether it's worth
 publishing.
-
----
-
-## Active
-
-
-
-_(Approved stories move here as they move through Designer → Developer →
-Tester → DevOps → SEO/GEO/AEO → Marketer, each appending a subsection below the
-story.)_
 
 ---
 
