@@ -29,7 +29,7 @@ Given a backlog story and its Design subsection in `team/backlog.md`:
 Once type-check + lint pass: commit on `feature/<story-slug>`, push, and open
 a PR into `dev` (`gh pr create --base dev`). You may merge it yourself —
 `dev` is the free-merge integration branch (see `CLAUDE.md` → Git Branch
-Policy). Never push directly to or merge into `qa`/`prod`.
+Policy). Never push directly to or merge into `qa`/`main`.
 
 ## Output
 Append an "Implementation" subsection to the story in `team/backlog.md`:

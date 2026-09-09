@@ -208,19 +208,20 @@ docker-compose down -v
 
 ---
 
-## VPS Deployment (prod branch)
+## VPS Deployment (main branch)
 
-Deploy is CI-triggered, not manual: a push to the `prod` branch (only ever
-from the founder's manual merge of a `qa → prod` PR — see `CLAUDE.md` → Git
-Branch Policy) runs `.github/workflows/deploy.yml`, which SSHes into the VPS
-and runs `scripts/deploy.sh` there. No SSH credentials are ever handled in
-a Claude session.
+`main` is the production branch — there is no separate `prod` branch. Deploy
+is CI-triggered, not manual: a push to `main` (only ever from the founder's
+manual merge of a `qa → main` PR — see `CLAUDE.md` → Git Branch Policy) runs
+`.github/workflows/deploy.yml`, which SSHes into the VPS and runs
+`scripts/deploy.sh` there. No SSH credentials are ever handled in a Claude
+session.
 
 ### One-time VPS setup (founder does this manually)
-1. `git clone` this repo to `~/videotoshorts` on the VPS, `git checkout prod`.
+1. `git clone` this repo to `~/videotoshorts` on the VPS, `git checkout main`.
 2. Copy `.env.example` to `.env` in that directory and fill in real values.
 3. Add a deploy key (or a dedicated read-only SSH key) so the VPS can
-   `git fetch origin prod` without a password prompt.
+   `git fetch origin main` without a password prompt.
 4. Confirm Docker + Docker Compose are installed on the VPS.
 
 ### Required GitHub repo secrets
@@ -234,10 +235,10 @@ Set these under Settings → Secrets and variables → Actions:
 ### Rollback
 ```bash
 # On the VPS, in ~/videotoshorts:
-git log --oneline -5          # find the last-known-good commit on prod
+git log --oneline -5          # find the last-known-good commit on main
 git reset --hard <commit-sha>
 docker compose build && docker compose up -d
 docker compose exec -T api alembic downgrade -1   # only if that release added a migration
 ```
-Or simpler: revert the bad commit on `prod` on GitHub and push — that
+Or simpler: revert the bad commit on `main` on GitHub and push — that
 re-triggers `deploy.yml` with the reverted code.

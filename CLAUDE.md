@@ -303,12 +303,13 @@ re-asks a prior role's questions.
 
 ## Git Branch Policy
 
-Three long-lived branches sit downstream of `main`, one per pipeline stage.
+Two long-lived branches sit downstream of feature work; `main` itself is the
+production branch — there is no separate `prod` branch.
 Convention-enforced (no GitHub branch-protection rules configured) — agents
 follow this by instruction, not by a technical block.
 
 ```
-feature/<story-slug> → dev → qa → prod
+feature/<story-slug> → dev → qa → main
    (dev agents)      (dev agents  (tester   (human founder
                        merge)      merges)    merges — only)
 ```
@@ -321,13 +322,13 @@ feature/<story-slug> → dev → qa → prod
   `team/backlog.md`'s acceptance criteria, and only on a pass opens a
   `dev → qa` PR, runs the `/code-review` skill against the diff as the PR
   review step, and merges it itself.
-- **`prod`** — production / deploy source. After the founder's release
+- **`main`** — production / deploy source. After the founder's release
   sign-off (governance gate 2 above), `tester` or the orchestrator opens the
-  `qa → prod` PR — but **only the human founder merges it**, on GitHub,
-  manually. No agent, including `devops`, merges into `prod`.
-- A push to `prod` (i.e. that human merge) triggers
+  `qa → main` PR — but **only the human founder merges it**, on GitHub,
+  manually. No agent, including `devops`, merges into `main`.
+- A push to `main` (i.e. that human merge) triggers
   `.github/workflows/deploy.yml`, which deploys to the VPS. See
-  `skills/DEPLOYMENT.md` → "VPS Deployment (prod branch)" for the mechanics
+  `skills/DEPLOYMENT.md` → "VPS Deployment (main branch)" for the mechanics
   and required secrets. `devops` maintains that workflow and the deploy
   script but never holds VPS credentials in a session — deploy secrets live
   only in GitHub's repo settings.

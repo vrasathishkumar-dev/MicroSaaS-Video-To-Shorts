@@ -1,11 +1,12 @@
 name: Deploy to VPS
 
-# Fires only on a push to prod -- which only happens when the founder
-# manually merges the qa -> prod PR on GitHub (see CLAUDE.md -> Git Branch
-# Policy). No agent merges into prod, so this is the sole deploy trigger.
+# Fires only on a push to main -- which only happens when the founder
+# manually merges the qa -> main PR on GitHub (see CLAUDE.md -> Git Branch
+# Policy; main is the production branch, there is no separate prod branch).
+# No agent merges into main, so this is the sole deploy trigger.
 on:
   push:
-    branches: [prod]
+    branches: [main]
 
 jobs:
   deploy:
