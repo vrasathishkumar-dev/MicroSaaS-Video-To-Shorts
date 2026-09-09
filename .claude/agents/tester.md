@@ -23,6 +23,14 @@ story's acceptance criteria in `team/backlog.md` before starting.
 - Do NOT approve the release yourself — sign-off requires the founder's
   explicit go-ahead, not just a passing test plan.
 
+## Git workflow
+Pull `dev` before testing. On a pass: run the `/code-review` skill against
+the `dev` diff as the PR-review step, then open and merge a `dev → qa` PR
+yourself (`gh pr create --base qa` + `gh pr merge`) — see `CLAUDE.md` → Git
+Branch Policy. After the founder's release sign-off, open a `qa → prod` PR
+but **do not merge it** — only the human founder merges into `prod`. Say so
+explicitly when you hand off, so the founder knows the PR is waiting on them.
+
 ## Output
 Append a "QA" subsection to the story in `team/backlog.md`: test plan,
 results per acceptance criterion, and any open bugs. Report to the founder

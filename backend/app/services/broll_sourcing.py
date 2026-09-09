@@ -521,7 +521,9 @@ def _extract_keywords_with_timing(
     if not segments:
         words = extract_keywords(clip.caption_text or "", max_keywords=3)
         seg_len = clip_duration / max(len(words), 1)
-        return [(w, round(i * seg_len, 2), round((i + 1) * seg_len, 2)) for i, w in enumerate(words)]
+        return [
+            (w, round(i * seg_len, 2), round((i + 1) * seg_len, 2)) for i, w in enumerate(words)
+        ]
 
     keyword_timings: list[tuple[str, float, float]] = []
     last_phrase: str | None = None
@@ -595,7 +597,7 @@ async def auto_source_broll(db: Session, clip: Clip) -> list[BrollAsset]:
 
     created: list[BrollAsset] = []
     used: set[tuple[str, str]] = set()
-    for (kw, pos_start, pos_end), results in zip(kw_timings, search_results):
+    for (kw, pos_start, pos_end), results in zip(kw_timings, search_results, strict=True):
         window = pos_end - pos_start
         pick = _choose_asset(results, used, window)
         if pick is None:

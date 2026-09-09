@@ -11,7 +11,6 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import os
 import re
 import subprocess
 from pathlib import Path
@@ -157,7 +156,9 @@ def _synthesize_macos_say(
 ) -> tuple[list[tuple[float, float, str]], float]:
     """Call macOS /usr/bin/say and convert to mp3."""
     aiff_path = output_path.with_suffix(".aiff")
-    subprocess.run(["/usr/bin/say", "-v", "Alex", "-o", str(aiff_path), text], check=True, timeout=60)
+    subprocess.run(
+        ["/usr/bin/say", "-v", "Alex", "-o", str(aiff_path), text], check=True, timeout=60
+    )
 
     # Convert to mp3
     subprocess.run(
@@ -185,7 +186,7 @@ def _create_silent_fallback(
     duration = 30.0
     subprocess.run(
         [
-            "ffmpeg", "-y", "-f", "lavfi", "-i", f"anullsrc=r=44100:cl=mono",
+            "ffmpeg", "-y", "-f", "lavfi", "-i", "anullsrc=r=44100:cl=mono",
             "-t", str(duration),
             "-c:a", "libmp3lame", "-b:a", "128k",
             str(output_path),

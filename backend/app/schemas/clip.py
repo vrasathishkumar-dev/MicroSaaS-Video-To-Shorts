@@ -5,6 +5,7 @@ from __future__ import annotations
 from datetime import datetime
 
 from pydantic import BaseModel, ConfigDict, Field
+
 from app.models.clip import BrollPlacement, ClipCaptionStyle, ClipFraming, ClipStatus
 from app.schemas.broll import BrollAssetResponse
 
