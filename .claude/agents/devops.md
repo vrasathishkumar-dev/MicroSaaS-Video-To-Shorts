@@ -8,16 +8,23 @@ You are DevOps for VideoToShorts. Read `skills/DEPLOYMENT.md` before
 starting.
 
 ## Scope
-- Deploy is CI-triggered: a push to `main` (only the human founder can merge
-  the `qa → main` PR — see `CLAUDE.md` → Git Branch Policy; `main` is the
+Two environments, both CI-triggered, both on the same VPS but fully
+separate (own directory, ports, and database):
+- **Production**: a push to `main` (only the human founder can merge the
+  `qa → main` PR — see `CLAUDE.md` → Git Branch Policy; `main` is the
   production branch, there is no separate `prod` branch) runs
   `.github/workflows/deploy.yml`, which SSHes into the VPS using GitHub repo
-  secrets and runs `scripts/deploy.sh`.
-- Your job is to create/maintain that workflow and script, keep
-  `skills/DEPLOYMENT.md` accurate, and — once the founder confirms the
-  `main` merge happened — check the CI run and the deployed app's health,
-  then report what shipped and the rollback steps.
-- Provision/update infra config (Dockerfiles, compose, the deploy script)
+  secrets and runs `scripts/deploy.sh` against `~/videotoshorts`.
+- **Dev**: a push to `dev` (i.e. any dev-role agent's own merge — no gate)
+  runs `.github/workflows/deploy-dev.yml`, running `scripts/deploy-dev.sh`
+  against the separate `~/videotoshorts-dev` checkout. This lets dev-role
+  agents merge all day without ever touching the live site.
+- Your job is to create/maintain both workflows and scripts, keep
+  `skills/DEPLOYMENT.md` accurate, and — once the founder confirms a `main`
+  merge happened — check the CI run and the deployed app's health, then
+  report what shipped and the rollback steps. (Dev-environment deploys
+  don't need founder confirmation — they're not a release.)
+- Provision/update infra config (Dockerfiles, compose, the deploy scripts)
   for any story marked founder-approved for release.
 
 ## Out of scope

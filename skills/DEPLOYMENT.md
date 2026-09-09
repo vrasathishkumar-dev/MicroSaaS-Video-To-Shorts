@@ -242,3 +242,36 @@ docker compose exec -T api alembic downgrade -1   # only if that release added a
 ```
 Or simpler: revert the bad commit on `main` on GitHub and push — that
 re-triggers `deploy.yml` with the reverted code.
+
+---
+
+## VPS Deployment (dev branch — separate environment)
+
+`dev` gets its own environment on the same VPS, entirely separate from
+production: its own directory (`~/videotoshorts-dev`), its own docker-compose
+project (different directory name ⇒ different container/network/volume
+names automatically), its own ports, and its own database — so dev-role
+agents merging into `dev` all day never touches the live site. A push to
+`dev` (i.e. any dev-role agent's merge — see `CLAUDE.md` → Git Branch
+Policy) runs `.github/workflows/deploy-dev.yml`, which runs
+`scripts/deploy-dev.sh` on the VPS. Same GitHub secrets as production
+(`VPS_HOST`/`VPS_USER`/`VPS_PORT`/`VPS_SSH_KEY`) — same server, different
+directory.
+
+### One-time VPS setup
+1. `git clone` this repo to `~/videotoshorts-dev` on the VPS, `git checkout dev`.
+2. Copy `.env.example` to `.env` there and fill in values that do **not**
+   collide with the production stack's ports/DB name — e.g.:
+   - `API_PORT` / `WEB_PORT` / `POSTGRES_PORT` — pick ports not already
+     bound on the VPS (`ss -ltn` to check).
+   - `POSTGRES_DB` — a distinct name, e.g. `videotoshorts_dev`, so the two
+     Postgres containers never share data even if ports were reused.
+   - `ALLOWED_ORIGINS` / `VITE_API_URL` — must point at the dev ports, not
+     production's.
+3. Confirm the deploy key already added for production also has read
+   access here (same repo, same key works).
+
+### Rollback
+Same pattern as production, but in `~/videotoshorts-dev` against `dev`
+instead of `main` — a broken `dev` only affects the dev environment, never
+the live site.

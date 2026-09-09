@@ -317,7 +317,10 @@ feature/<story-slug> → dev → qa → main
 - **`dev`** — integration branch. `backend-agent` / `frontend-agent` /
   `database-agent` commit to a `feature/<story-slug>` branch and may open
   *and merge* their own PR into `dev` once their self-checks pass (tests,
-  lint/type-check). No gate here — this is where agents move fast.
+  lint/type-check). No gate here — this is where agents move fast. A push
+  to `dev` auto-deploys to a **separate dev environment** on the VPS
+  (own directory, ports, and database — never the live site); see
+  `skills/DEPLOYMENT.md` → "VPS Deployment (dev branch)".
 - **`qa`** — QA-gated branch. `tester` pulls `dev`, runs the test plan from
   `team/backlog.md`'s acceptance criteria, and only on a pass opens a
   `dev → qa` PR, runs the `/code-review` skill against the diff as the PR
