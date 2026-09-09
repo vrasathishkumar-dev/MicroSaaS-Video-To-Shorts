@@ -90,3 +90,38 @@ board only.
 approval flow expects YES/NO capture via an n8n webhook writing to this file. There is
 no such capture. Until it exists, approvals reach the company only when the owner
 relays them, and every A2 card must sit BLOCKED rather than assume consent.
+
+---
+
+## ADR-004 · Full company installed - 24 agents
+**Date:** 2026-09-09 · **Decided by:** Owner ("install all the agents... I want like real company") · **Autonomy:** A2 approved in instruction
+
+Installed the 13 VC-1 roles that had no existing equivalent: `vc-pm`,
+`vc-architect`, `vc-finance`, `vc-legal-risk`, `vc-competitor-intel`,
+`vc-customer-research`, `vc-digital-marketing`, `vc-content-social`,
+`vc-offline-marketing`, `vc-sales`, `vc-support`, `vc-data-analyst`,
+`vc-agent-factory`. With the existing 10 plus `vc-ceo`, the company is 24 agents.
+
+**Not installed, deliberately:** `vc-researcher`, `vc-ba`, `vc-designer`,
+`vc-qa`, `vc-devops`, `vc-engineer`, `vc-search-visibility` - these duplicate
+`researcher`, `ba`, `designer`, `tester`, `devops`,
+`backend-agent`/`frontend-agent`/`database-agent`, and `seo-geo`. Installing them
+would create the second workforce the owner explicitly forbade.
+
+**Reverses part of ADR-002.** ADR-002 skipped pm/finance/legal-risk/support/
+data-analyst/agent-factory as overhead at zero revenue. That reasoning was wrong
+on `vc-pm` in particular: the kanban dispatcher only routes cards that already
+exist, it never creates them. On 2026-09-09 the board went completely idle with
+11 agents employed and nothing to do - a PM-shaped hole. `vc-pm` now owns
+`company/state/board.md` and keeping the queue fed.
+
+**Consequence / open risk (R-00x):** several roles now overlap
+(`marketer` vs `vc-digital-marketing` + `vc-content-social`;
+`researcher` vs `vc-competitor-intel` + `vc-customer-research`). Overlap means
+two agents can believe they own a task. Per ORG.md §3 that is `vc-ceo`'s call to
+resolve and log here. Owner may retire `marketer` later; not deleted without
+approval per the standing rule on deleting agents.
+
+**Still not enforceable on this architecture:** A2 approval capture. Telegram is
+send-only here, so every approval still reaches the company via the owner
+relaying it. Agents must block, never assume consent.

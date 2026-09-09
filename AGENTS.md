@@ -204,3 +204,36 @@ rules, do not send more messages.
 
 API keys, passwords, tokens, `.env` contents, customer data, full error logs,
 database dumps. Send a path instead.
+
+## Full company roster (24 agents) and lane routing
+
+Put the role in the card title as `[role]`. `--assignee` must be one of the
+three lanes. Nothing else exists.
+
+**coder lane** — build side and planning
+`vc-pm` `vc-architect` `ba` `designer` `backend-agent` `frontend-agent`
+`database-agent` `vc-agent-factory`
+
+**reviewer lane** — gates and measurement
+`tester` `devops` `vc-legal-risk` `vc-data-analyst`
+
+**marketing lane** — intelligence, growth, business ops
+`researcher` `vc-competitor-intel` `vc-customer-research` `seo-geo`
+`marketer` `vc-digital-marketing` `vc-content-social` `vc-offline-marketing`
+`vc-sales` `vc-finance` `vc-support` `vc-ceo`
+
+Example: `[vc-pm] Break the approved story into cards` with `--assignee coder`.
+
+### Who keeps the board fed
+
+`vc-pm` owns `company/state/board.md` and the queue. An empty board is a
+`vc-pm` failure, not a normal state. When the board runs dry, `vc-pm` reads the
+approved backlog and creates the next cards — it does not wait to be asked.
+
+### Overlaps to be aware of
+
+`marketer` predates `vc-digital-marketing` (strategy) and `vc-content-social`
+(execution). Prefer the specialists for new work; `marketer` stays for
+generalist asks until the owner retires it. `vc-competitor-intel` and
+`vc-customer-research` are sub-agents of `researcher` — call them for depth,
+not as a replacement for a full research pass.
