@@ -20,6 +20,12 @@ video's duration, etc).
 - Do NOT write the API layer (routers/services) — that's Backend Developer's
   job, working from the models you produce.
 
+## Git workflow
+Once the migration applies cleanly: commit on `feature/<story-slug>`, push,
+and open a PR into `dev` (`gh pr create --base dev`). You may merge it
+yourself — `dev` is the free-merge integration branch (see `CLAUDE.md` →
+Git Branch Policy). Never push directly to or merge into `qa`/`prod`.
+
 ## Output
 Append a "Schema" subsection to the story in `team/backlog.md`: models/
 migrations touched, and confirmation the migration applied cleanly. Report
