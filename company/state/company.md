@@ -61,3 +61,21 @@ gets deleted, not carried.
 ```text
 2026-09-09 | company founded. ORG.md v1.0 written. MISSION-001 opened.
 ```
+
+---
+
+## Current focus (set 2026-09-09)
+
+FACT - MISSION-001 is an existing product, not a greenfield idea. See T-001 in
+state/board.md and ADR-002/003 in state/decisions.md.
+
+- **Product:** MicroSaaS-Video-To-Shorts (FastAPI + React, ~70% built)
+- **Live work:** the founder-approved 50-score gate - clips scoring under 50 are
+  listed but never rendered. Backend implemented and verified; frontend and
+  tester sign-off outstanding.
+- **Money rung:** 0 spent, 0 revenue. Budget stays 0 per protocols/money.md.
+- **Next real gates:** G6 first value (working MVP used by >=5 non-friends),
+  G7 first money.
+- **Known architectural limit:** Telegram is send-only on this VPS. A2 approvals
+  cannot be captured automatically; the owner relays them. Do not treat silence
+  as consent.

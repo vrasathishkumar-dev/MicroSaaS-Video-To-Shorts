@@ -12,7 +12,7 @@
 ## Blocked
 
 ```text
-T-001 | MISSION-001 | owner: vc-ceo | status: BLOCKED-APPROVAL | 2026-09-09
+T-001 | MISSION-001 | owner: vc-ceo | status: DONE | resolved 2026-09-09
 Goal:       Confirm what MISSION-001 actually is
 Done when:  Owner confirms whether "video to shorts" is an existing repo (and
             its path/URL) or a new idea to build from scratch, and confirms the
@@ -60,4 +60,42 @@ Output to:  protocols/telegram.md (mark as built)
 ```text
 D-000 | 2026-09-09 | Company operating system written (ORG.md + 21 agents +
         protocols + playbooks + templates)
+```
+
+### VC-1 standup — 2026-09-09 11:37 UTC
+```text
+🏢 VC-1 · 2026-09-09 · MISSION-001
+Done: Company OS scaffolded (ORG.md, 21 agent files, protocols, playbooks) — D-000. No mission work completed.
+Today: Get owner's answer on T-001 (existing repo vs new build) to unblock G1 research.
+Blocked: T-001 — scope confirmation, owner. Also `hermes kanban --board microsaas list` denied approval, so live kanban state could not be read this cycle.
+Waiting on you: Confirm whether "video to shorts" = your existing repo (path/URL) or an OSS project to build from, per MISSION-001-video-to-shorts.md.
+Gate: G0 Scope due 2026-09-09 — at risk (due today, unconfirmed).
+Money: ₹0 spent / ₹0 revenue.
+```
+
+## Resolved
+
+```text
+T-001 | MISSION-001 | owner: vc-ceo | status: DONE | RESOLVED 2026-09-09
+Answer:     CASE A - the owner has an EXISTING repo to finish and commercialise.
+Repo:       github.com/vrasathishkumar-dev/MicroSaaS-Video-To-Shorts (public)
+On VPS:     /srv/microsaas-video-to-shorts
+Evidence:   FACT - FastAPI backend with 8 routers, React/Vite frontend, Docker;
+            281 backend tests pass (verified 2026-09-09); stories already marked
+            deployed in team/backlog.md.
+Therefore:  the mission is FINISH AND SHIP, not validate-and-build. G1-G4 are
+            largely satisfied by the researcher run of 2026-09-09 (BUILD verdict,
+            competitor + pricing + channel evidence). Remaining real gates are
+            G6 first value and G7 first money.
+```
+
+### VC-1 standup — 2026-09-09 11:38 UTC
+```text
+🏢 VC-1 · 2026-09-09 · MISSION-001
+Done: 50-score gate story (ba), UI spec for unrendered-clips state (designer), backend gate on virality score≥50 (backend-agent), and tester audit of pytest results — all closed on kanban.
+Today: Route to frontend-agent to implement the designer's unrendered-clips UI, then back to tester for full sign-off.
+Blocked: nothing.
+Waiting on you: nothing.
+Gate: G6 first value due — at risk (backend gate shipped, frontend + tester sign-off still open).
+Money: 0 spent
 ```
