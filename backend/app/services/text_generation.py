@@ -96,7 +96,9 @@ _SYSTEM_PROMPT = textwrap.dedent("""
       {
         "title": "Short punchy headline (e.g. Rogue Planets in Deep Space)",
         "narration": "Full narration line spoken continuously (60-80 words)",
-        "keywords": ["space galaxy dark", "frozen planet stars", "deep ocean underwater", "telescope cosmos"],
+        "keywords": [
+          "space galaxy dark", "frozen planet stars", "deep ocean underwater", "telescope cosmos"
+        ],
         "duration_seconds": 30
       }
     ]
@@ -205,64 +207,92 @@ _CURATED_THEMES: dict[str, list[dict[str, object]]] = {
         {
             "title": "Rogue Planets Wandering the Void",
             "narration": (
-                "Did you know there are trillion-ton rogue planets wandering completely alone in deep space? "
-                "Violently ejected from their home solar systems, these orphaned worlds drift through interstellar darkness with frozen atmospheres. "
-                "Yet scientists believe radioactive decay deep inside their cores keeps subsurface oceans liquid and warm enough to harbor alien life. "
-                "Billions of these ghost planets could be drifting right past our galaxy. Space is truly terrifying!"
+                "Did you know there are trillion-ton rogue planets wandering completely alone "
+                "in deep space? Violently ejected from their home solar systems, these "
+                "orphaned worlds drift through interstellar darkness with frozen atmospheres. "
+                "Yet scientists "
+                "believe radioactive decay deep inside their cores keeps subsurface oceans liquid "
+                "and warm enough to harbor alien life. Billions of these ghost planets could be "
+                "drifting right past our galaxy. Space is truly terrifying!"
             ),
-            "keywords": ["space galaxy dark", "frozen planet universe", "deep ocean glow", "stars cosmos telescope"],
+            "keywords": [
+                "space galaxy dark", "frozen planet universe", "deep ocean glow",
+                "stars cosmos telescope",
+            ],
         },
         {
             "title": "The Terrifying Power of Neutron Stars",
             "narration": (
-                "What if a single teaspoon of matter weighed more than Mount Everest? "
-                "When massive stars collapse in violent supernova explosions, they form ultra-dense neutron stars spinning hundreds of times per second. "
-                "Their magnetic fields are so intense they could dissolve the atoms in your body from thousands of miles away! "
-                "These cosmic powerhouses are some of the most extreme objects in our universe."
+                "What if a single teaspoon of matter weighed more than Mount Everest? When massive "
+                "stars collapse in violent supernova explosions, they form ultra-dense neutron "
+                "stars spinning hundreds of times per second. Their magnetic fields are so intense "
+                "they could dissolve the atoms in your body from thousands of miles away! These "
+                "cosmic powerhouses are some of the most extreme objects in our universe."
             ),
-            "keywords": ["supernova star explosion", "neutron star galaxy", "magnetic field aurora", "deep space nebula"],
+            "keywords": [
+                "supernova star explosion", "neutron star galaxy", "magnetic field aurora",
+                "deep space nebula",
+            ],
         },
         {
             "title": "Cosmic Water Clouds in Deep Space",
             "narration": (
-                "Floating twelve billion light years away is a cosmic cloud holding more water than all of Earth's oceans combined! "
-                "This gargantuan reservoir feeds a supermassive black hole quasar, radiating energy equal to a thousand trillion suns. "
-                "The vapor stretches hundreds of light-years across space, proving that water has existed since the dawn of the universe. "
-                "Follow for more unbelievable cosmic secrets!"
+                "Floating twelve billion light years away is a cosmic cloud holding more water "
+                "than all of Earth's oceans combined! This gargantuan reservoir feeds a "
+                "supermassive "
+                "black hole quasar, radiating energy equal to a thousand trillion suns. The vapor "
+                "stretches hundreds of light-years across space, proving that water has existed "
+                "since the dawn of the universe. Follow for more unbelievable cosmic secrets!"
             ),
-            "keywords": ["black hole quasar space", "cosmic water nebula", "galaxy universe stars", "deep space cosmos"],
+            "keywords": [
+                "black hole quasar space", "cosmic water nebula", "galaxy universe stars",
+                "deep space cosmos",
+            ],
         },
     ],
     "monkey": [
         {
             "title": "Genius Monkeys Using Stone Tools",
             "narration": (
-                "Did you know that wild monkeys have officially entered their own Stone Age? "
-                "In South America, capuchin monkeys select heavy quartz anvil stones and carefully hammer open stubborn palm nuts. "
-                "Archaeologists discovered they have been passing this toolcraft down through generations for over three thousand years! "
-                "Their problem-solving skills rival early humans. Animal intelligence is truly astonishing!"
+                "Did you know that wild monkeys have officially entered their own Stone Age? In "
+                "South America, capuchin monkeys select heavy quartz anvil stones and carefully "
+                "hammer open stubborn palm nuts. Archaeologists discovered they have been passing "
+                "this toolcraft down through generations for over three thousand years! Their "
+                "problem-solving skills rival early humans. Animal intelligence is truly "
+                "astonishing!"
             ),
-            "keywords": ["monkey chimpanzee nature", "stone tool primitive", "wildlife jungle troop", "cute monkey forest"],
+            "keywords": [
+                "monkey chimpanzee nature", "stone tool primitive", "wildlife jungle troop",
+                "cute monkey forest",
+            ],
         },
         {
             "title": "The Secret Vocal Language of Monkeys",
             "narration": (
-                "Monkeys don't just chatter; they speak in sophisticated dialects! "
-                "Vervet monkeys use distinct alarm calls for specific predators like leopards, eagles, and venomous snakes. "
-                "When a sentry sounds the eagle alarm, the entire troop immediately looks up and dives into dense bushes for cover. "
-                "Their communication system is far closer to human speech than we ever imagined!"
+                "Monkeys don't just chatter; they speak in sophisticated dialects! Vervet monkeys "
+                "use distinct alarm calls for specific predators like leopards, eagles, and "
+                "venomous snakes. When a sentry sounds the eagle alarm, the entire troop "
+                "immediately looks up and dives into dense bushes for cover. Their communication "
+                "system is far closer to human speech than we ever imagined!"
             ),
-            "keywords": ["monkey face looking", "eagle predator flying", "jungle tree canopy", "monkey troop forest"],
+            "keywords": [
+                "monkey face looking", "eagle predator flying", "jungle tree canopy",
+                "monkey troop forest",
+            ],
         },
         {
             "title": "Master Acrobats of the Jungle Canopy",
             "narration": (
-                "Watch closely, because spider monkeys can leap over thirty feet between trees without missing a beat! "
-                "Their prehensile tail acts as a powerful fifth hand, capable of supporting their entire body weight with ease. "
-                "Swinging high above the rainforest floor, they navigate treacherous canopy gaps at breakneck speeds. "
-                "They are nature's ultimate high-wire daredevils. Share this if you love wildlife!"
+                "Watch closely, because spider monkeys can leap over thirty feet between trees "
+                "without missing a beat! Their prehensile tail acts as a powerful fifth hand, "
+                "capable of supporting their entire body weight with ease. Swinging high above the "
+                "rainforest floor, they navigate treacherous canopy gaps at breakneck speeds. They "
+                "are nature's ultimate high-wire daredevils. Share this if you love wildlife!"
             ),
-            "keywords": ["spider monkey swing", "rainforest jungle tree", "monkey jump branch", "wild wildlife nature"],
+            "keywords": [
+                "spider monkey swing", "rainforest jungle tree", "monkey jump branch",
+                "wild wildlife nature",
+            ],
         },
     ],
 }
@@ -282,7 +312,11 @@ def _heuristic_generate(
             segments: list[ScriptSegment] = []
             for i in range(shorts_count):
                 story = stories[i % len(stories)]
-                part_title = f"{title} – {story['title']}" if shorts_count > 1 else str(story["title"])
+                part_title = (
+                    f"{title} – {story['title']}"
+                    if shorts_count > 1
+                    else str(story["title"])
+                )
                 segments.append(
                     ScriptSegment(
                         index=i,
@@ -342,10 +376,12 @@ def _build_story_segment(
         f"changes the way we understand this phenomenon."
     )
     twist = (
-        f"When observed in action, the sheer scale and complexity defy conventional wisdom, "
-        f"pushing the boundaries of what was previously thought possible."
+        "When observed in action, the sheer scale and complexity defy conventional wisdom, "
+        "pushing the boundaries of what was previously thought possible."
     )
-    conclusion = f"The world is full of incredible wonders. Follow for more fascinating daily discoveries!"
+    conclusion = (
+        "The world is full of incredible wonders. Follow for more fascinating daily discoveries!"
+    )
 
     narration = f"{hook} {development} {twist} {conclusion}"
     part_title = f"{main_title} — Fact {index + 1}" if total_count > 1 else main_title

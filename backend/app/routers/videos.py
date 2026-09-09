@@ -86,7 +86,11 @@ async def process_video_project(project_id: int) -> None:
             return
 
         try:
-            file_path = str(storage.get_file_path(project.source_file_path)) if project.source_file_path else None
+            file_path = (
+                str(storage.get_file_path(project.source_file_path))
+                if project.source_file_path
+                else None
+            )
             if not file_path or not Path(file_path).exists():
                 if project.source_type == SourceType.url and project.source_url:
                     project.status = VideoProjectStatus.downloading

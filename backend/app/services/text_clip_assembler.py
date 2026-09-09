@@ -17,11 +17,9 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-import os
 import shutil
 import subprocess
 import tempfile
-import textwrap
 import uuid
 from pathlib import Path
 
@@ -124,7 +122,11 @@ def _assemble(clip: Clip, db) -> Path:  # type: ignore[no-untyped-def]
         _, events, voice_duration = synthesize_speech_sync(narration, voice_path)
 
         total_duration = max(15.0, voice_duration)
-        logger.info("Voiceover ready: duration=%.2fs (%d timed caption events)", total_duration, len(events))
+        logger.info(
+            "Voiceover ready: duration=%.2fs (%d timed caption events)",
+            total_duration,
+            len(events),
+        )
 
         # Update clip end time to match the real voice narration duration
         clip.start_time = 0.0
@@ -138,7 +140,10 @@ def _assemble(clip: Clip, db) -> Path:  # type: ignore[no-untyped-def]
         # Download raw videos
         downloaded_raw = _download_clips(urls, str(tmp))
         if not downloaded_raw:
-            logger.warning("No B-roll videos downloaded for clip_id=%s; generating animated background scenes", clip.id)
+            logger.warning(
+                "No B-roll videos downloaded for clip_id=%s; generating animated background scenes",
+                clip.id,
+            )
             downloaded_raw = _generate_procedural_scenes(keywords, str(tmp))
 
         # 3. Normalize each scene with loop and exact duration
@@ -152,7 +157,9 @@ def _assemble(clip: Clip, db) -> Path:  # type: ignore[no-untyped-def]
 
         # 4. Concatenate normalized scenes into base video
         concat_file = tmp / "concat.txt"
-        concat_file.write_text("\n".join([f"file '{p.as_posix()}'" for p in normalized_scenes]) + "\n")
+        concat_file.write_text(
+            "\n".join([f"file '{p.as_posix()}'" for p in normalized_scenes]) + "\n"
+        )
 
         base_video = tmp / "base_video.mp4"
         subprocess.run(
@@ -170,7 +177,11 @@ def _assemble(clip: Clip, db) -> Path:  # type: ignore[no-untyped-def]
 
         # 5. Render timed caption overlays
         font_file = _caption_font_file()
-        style_name = clip.caption_style.value if hasattr(clip.caption_style, "value") else str(clip.caption_style or "hormozi")
+        style_name = (
+            clip.caption_style.value
+            if hasattr(clip.caption_style, "value")
+            else str(clip.caption_style or "hormozi")
+        )
         captions_dir = tmp / "captions"
         captions_dir.mkdir(parents=True, exist_ok=True)
         caption_images = render_caption_images(
@@ -325,12 +336,14 @@ def _download_clips(urls: list[str], tmp_dir: str) -> list[Path]:
     for i, url in enumerate(urls):
         dest = Path(tmp_dir) / f"broll_{i:03d}.mp4"
         try:
-            with httpx.Client(timeout=_HTTP_TIMEOUT, follow_redirects=True) as client:
-                with client.stream("GET", url) as resp:
-                    resp.raise_for_status()
-                    with open(dest, "wb") as f:
-                        for chunk in resp.iter_bytes(chunk_size=65536):
-                            f.write(chunk)
+            with (
+                httpx.Client(timeout=_HTTP_TIMEOUT, follow_redirects=True) as client,
+                client.stream("GET", url) as resp,
+            ):
+                resp.raise_for_status()
+                with open(dest, "wb") as f:
+                    for chunk in resp.iter_bytes(chunk_size=65536):
+                        f.write(chunk)
             downloaded.append(dest)
             logger.debug("Downloaded B-roll %s -> %s", url, dest)
         except Exception as exc:
