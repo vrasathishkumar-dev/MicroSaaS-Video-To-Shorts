@@ -1,0 +1,23 @@
+name: Deploy to VPS (dev environment)
+
+# Fires on every push to dev -- i.e. every time a dev-role agent merges its
+# own PR (see CLAUDE.md -> Git Branch Policy). Deploys to a separate
+# directory/port set on the same VPS so it never touches the production
+# site, which only deploys from main (see deploy.yml).
+on:
+  push:
+    branches: [dev]
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: SSH and deploy
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USER }}
+          key: ${{ secrets.VPS_SSH_KEY }}
+          port: ${{ secrets.VPS_PORT }}
+          script: |
+            bash ~/videotoshorts-dev/scripts/deploy-dev.sh
