@@ -2675,3 +2675,63 @@ story before DevOps deploys it.
 
 _(Fully shipped stories move here, complete with every role's subsection, as
 a record of what was built and why.)_
+
+#### Designer
+
+**Spec: 50-score gate UI — unrendered clips state**
+
+**Scope:** clips scoring under 50 are listed but NOT rendered. This spec covers what the user sees (badge, empty state, any manual override affordance), and how a rendered vs unrendered clip differ visually. Consistent with `frontend/src/lib/virality.ts` score bands.
+
+**1. Existing score bands (from `virality.ts`):**
+- score ≥ 90 → `emerald` — "Viral Potential"
+- 80–89 → `amber` — "High Performing"
+- 50–79 → `primary`/blue — "Good Insight"
+- score < 50 → `bg-destructive/15 text-destructive border-destructive/30` — "Needs Manual Review" (new band)
+- `REVIEW_THRESHOLD = 50` — named constant, one-line tune
+
+**2. Badge (ViralityScoreBadge) — what the user sees for a clip scoring under 50:**
+- Red pill (destructive color), same shape/layout as other bands
+- Icon: `AlertCircle` (existing warning icon) instead of `TrendingUp`
+- No `animate-pulse` (reserved for top-tier flame)
+- Text: "Needs Manual Review"
+- Score number shown alongside (e.g. "42 / 100")
+- No transition animation when score changes
+
+**3. Unrendered clip state (score < 50, clip NOT rendered):**
+- Listed in Clip Library grid, but no render button enabled by default
+- Card shows: red "Needs Manual Review" badge + clip thumbnail (if exists) + title
+- Render button is **disabled/greyed** with tooltip: "Score too low to auto-render — review first"
+- Manual override: a "Review & Render Anyway" link/button appears on click/hover that explicitly opts in to rendering despite low score
+- This is a deliberate gate, not an error — the clip is not deleted or hidden
+
+**4. Rendered vs unrendered clip — visual difference:**
+- **Unrendered** (score < 50, not yet rendered): red badge, no render button, thumbnail may be placeholder/first-frame only
+- **Rendered** (score < 50 but user overrode gate): red badge remains (score is still low), but render button now shows "Re-render" and a green checkmark or "Rendered" status pill appears
+- **Rendered** (score ≥ 50): normal colored badge (emerald/amber/blue), render button available, no override needed
+- The score badge color is the primary differentiator; the render state is secondary (status pill, button label)
+
+**5. Empty state (all clips under 50, none rendered):**
+- Clip Library grid shows all clips with red badges
+- A banner/notice above the grid: "X clips need manual review before rendering"
+- No error state — it's a normal workflow state
+- Empty grid (no clips at all) shows existing empty state unchanged
+
+**6. Manual override affordance:**
+- Per-clip: "Review & Render Anyway" button on card hover/click
+- Opens a confirmation modal: "This clip scored 42/100. Rendering is estimated to take ~2 min. Continue?"
+- Confirmed → clip renders, status pill shows "Rendered", badge stays red
+- Cancel → clip stays unrendered, nothing changes
+- No bulk override — each clip decided individually (deliberate gate)
+
+**7. Consistency with existing UI patterns:**
+- Red color: same `bg-destructive/15 text-destructive border-destructive/30` as `failed` clip-status pill
+- Icon: `AlertCircle` from existing warning icon set
+- Pills/badges: same size, shape, font as `ViralityScoreBadge` other bands
+- Status pills: same treatment as existing `draft`/`rendering`/`ready`/`failed` pills
+- No new colors, no new components, no new animations
+
+**8. Edge cases:**
+- Score is `null` (legacy clip, not yet scored): "Not yet scored" neutral pill, no gate, render button available
+- Score changes after re-render: badge color updates, gate re-evaluates
+- Clip re-edited (boundaries change): score recomputed, gate re-evaluates
+- All clips under 50: grid shows all with red badges, banner notice, no bulk action
