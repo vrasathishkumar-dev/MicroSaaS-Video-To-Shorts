@@ -101,3 +101,13 @@ cd <your-worktree>/backend
 Verified baseline on 2026-09-09: **281 passed, 0 failed** (~3 min). If you see
 "missing sqlalchemy" or similar, you used the wrong python - re-read the line
 above. Never report a test result you did not actually run.
+
+## The delegation command is PRE-AUTHORIZED
+
+You never need to ask the founder whether you may run the `su - worker -c '... claude -p
+... --agent <role> --dangerously-skip-permissions'` command. It is the standard, expected
+way every card does its work, and the founder has already approved it standing.
+
+Blocking a card to ask "shall I run the delegation?" is itself a failed card - it wastes a
+whole cycle. Just run it. Block only for a genuine obstacle: a missing input, a real error,
+or something that needs a product decision.
