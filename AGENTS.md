@@ -111,3 +111,96 @@ way every card does its work, and the founder has already approved it standing.
 Blocking a card to ask "shall I run the delegation?" is itself a failed card - it wastes a
 whole cycle. Just run it. Block only for a genuine obstacle: a missing input, a real error,
 or something that needs a product decision.
+
+---
+
+# VC-1 GOVERNANCE (company operating layer)
+
+The constitution is `company/ORG.md` and it wins over this file on any conflict.
+The company's brain is `company/state/`. Roles map to the 10 agents already in
+`.claude/agents/` plus `vc-ceo` - see ADR-002 in `company/state/decisions.md`.
+**No second set of workers. Never create a vc-* worker agent.**
+
+## Autonomy levels - state yours before acting
+
+```
+A0 ACT       do it, append one line to company/state/board.md, no message
+A1 ACT+TELL  do it, then send one Telegram line
+A2 ASK       STOP. kanban_block with an APPROVAL REQUEST. Never proceed.
+A3 OWNER     never do it. Write exact steps for Sathish and stop.
+```
+
+Defaults: research/draft/code/test = A0. Deploy to staging, reports = A1.
+Verdicts, MVP scope, pricing, publishing, contacting real people, production
+deploy, killing a mission, creating an agent = **A2**. Money, credentials,
+legal, tax, identity, app-store, bank, deleting data = **A3**.
+
+An unanswered approval is NOT a yes. After 24h the card stays blocked, is
+re-raised once in the standup, then dropped. Do not infer consent from silence.
+
+## Decision rights - one decider per decision
+
+| Decision | Decider | Owner approval |
+|---|---|---|
+| What the mission is | Owner | - |
+| Build / modify / do-not-build verdict | `researcher` | YES (A2) |
+| MVP scope | `vc-ceo` (consults ba) | YES (A2) |
+| Technical architecture | `backend-agent` | No (A0) |
+| Code passes / merges | `tester` ONLY | No (A0) |
+| Deploy to production | `devops` | YES (A2) |
+| Publishing anything public | `marketer` | YES (A2) |
+| Pricing | `researcher` | YES (A2) |
+| Killing a mission | `vc-ceo` | YES (A2) |
+| Spending money | Owner only | YES (A3) |
+
+`backend-agent`, `frontend-agent` and `database-agent` may NOT mark their own
+work passed. Only `tester` can. If two agents both think they own a task,
+`vc-ceo` decides and logs it in `company/state/decisions.md`.
+
+## State files - read first, append last
+
+Every card, before working: read `company/state/board.md`, `decisions.md`,
+`risks.md`, and the active mission in `company/missions/`.
+Every card, before completing: append what changed. Append, never rewrite.
+Every entry dated. If a state file and your memory disagree, the file wins.
+
+Writes go through Claude Code - your Hermes profile has no file toolset.
+
+## Truth labels - required in every report
+
+`FACT` (named source) · `OBSERVATION` (seen, say where) · `ESTIMATE` (show the
+maths) · `ASSUMPTION` (say what would confirm it). Plus confidence HIGH/MED/LOW.
+Never promote an ASSUMPTION to a FACT in a later summary. If something cannot be
+researched write `UNAVAILABLE - <reason>`; never skip it silently.
+A report with no LOW-confidence items is suspicious.
+
+## Research before build - THIS ONE IS MACHINE-ENFORCED
+
+No card enters the coder lane for a new mission until the `researcher` verdict
+for that mission is approved by the owner. This is enforced by kanban parent
+dependencies, not trust:
+
+```bash
+# the build card cannot be promoted until the research card completes
+hermes kanban --board microsaas create '[backend-agent] ...' --parent <research_card_id>
+```
+
+The dispatcher refuses to promote a card with unsatisfied parents. If the
+research card sits BLOCKED awaiting approval, the build card never runs.
+
+## Mission gates and the kill rule
+
+Gates live in the mission file. Miss two consecutive gates -> `vc-ceo` proposes
+**KILL** at the next board review, as an A2 approval. Killing is a success, not
+a failure: log the decision and the lesson in `company/state/decisions.md`.
+
+## Message budget
+
+Max 1 standup + 2 approvals per day. No progress narration, no "just letting you
+know". More than 3 messages a day means the escalation rules are wrong - fix the
+rules, do not send more messages.
+
+## Never send via Telegram
+
+API keys, passwords, tokens, `.env` contents, customer data, full error logs,
+database dumps. Send a path instead.
