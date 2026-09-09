@@ -59,6 +59,7 @@ const STATUS_PROGRESS: Record<VideoProjectStatus, number> = {
   downloading: 35,
   transcribing: 65,
   analyzing: 85,
+  generating: 65,
   ready: 100,
   failed: 0,
 };

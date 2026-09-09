@@ -47,6 +47,11 @@ class Settings(BaseSettings):
     PEXELS_API_KEY: str = ""
     PIXABAY_API_KEY: str = ""
 
+    # OpenAI API key for text-to-shorts script generation.
+    # Leave empty to use the built-in heuristic fallback (no AI key needed).
+    OPENAI_API_KEY: str = ""
+
+
     # Transcription. `auto` uses the hosted Whisper API when
     # TRANSCRIPTION_API_KEY is set and local Whisper otherwise, so the app
     # transcribes for real out of the box with nothing to configure;

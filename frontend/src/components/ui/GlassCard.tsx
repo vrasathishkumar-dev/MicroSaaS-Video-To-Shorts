@@ -8,18 +8,18 @@ export interface GlassCardProps extends HTMLMotionProps<'div'> {
 }
 
 /**
- * Frosted-glass container with a subtle rise-on-hover elevation effect.
- * Use for dashboard tiles, form panels, and content cards throughout the app.
+ * Dark card surface — Restream-inspired.
+ * Slightly elevated dark panel with a subtle white border and soft shadow.
+ * Use for all content panels, form sections, and data tiles throughout the app.
  */
 export function GlassCard({ children, className, ...props }: GlassCardProps) {
   return (
     <motion.div
-      initial={{ opacity: 0, y: 20 }}
+      initial={{ opacity: 0, y: 16 }}
       animate={{ opacity: 1, y: 0 }}
-      whileHover={{ scale: 1.02, y: -5 }}
-      transition={{ duration: 0.3, ease: 'easeOut' }}
+      transition={{ duration: 0.35, ease: 'easeOut' }}
       className={cn(
-        'rounded-2xl border border-glass-border bg-glass-bg p-6 shadow-xl backdrop-blur-lg',
+        'rounded-[20px] border border-glass-border bg-card p-6 shadow-[0_4px_32px_rgba(0,0,0,0.4)]',
         className,
       )}
       {...props}

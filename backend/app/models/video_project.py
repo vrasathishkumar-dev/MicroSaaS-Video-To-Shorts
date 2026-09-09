@@ -5,7 +5,7 @@ from __future__ import annotations
 import enum
 from typing import TYPE_CHECKING
 
-from sqlalchemy import Boolean, Enum, Float, ForeignKey, String, Text
+from sqlalchemy import Boolean, Enum, Float, ForeignKey, Integer, String, Text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.models.base import Base, TimestampMixin
@@ -22,6 +22,7 @@ class SourceType(str, enum.Enum):
 
     upload = "upload"
     url = "url"
+    text = "text"  # AI-generated from a title + description prompt
 
 
 class VideoProjectStatus(str, enum.Enum):
@@ -31,6 +32,7 @@ class VideoProjectStatus(str, enum.Enum):
     downloading = "downloading"
     transcribing = "transcribing"
     analyzing = "analyzing"
+    generating = "generating"  # AI text-to-video pipeline in progress
     ready = "ready"
     failed = "failed"
 
@@ -69,6 +71,11 @@ class VideoProject(Base, TimestampMixin):
     )
     duration_seconds: Mapped[float | None] = mapped_column(Float, nullable=True)
     error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+    # Text-to-shorts generation metadata (populated when source_type=text)
+    description: Mapped[str | None] = mapped_column(Text, nullable=True)
+    shorts_count: Mapped[int | None] = mapped_column(Integer, nullable=True)
+
 
     # What the submitter asked for. `target_clip_length` shapes how the
     # highlights are cut; the rest are the defaults every clip generated

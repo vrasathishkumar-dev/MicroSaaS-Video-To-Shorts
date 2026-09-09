@@ -63,3 +63,7 @@ numpy>=1.26.0
 # build is deliberate -- no GUI libs are needed on a render box. Without
 # this, reframing still runs on its skin-and-motion fallback.
 opencv-python-headless>=4.9,<5
+
+# AI Text-to-Shorts voiceover narration & script generation
+edge-tts>=7.0.0
+openai>=1.0.0

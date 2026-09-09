@@ -63,6 +63,8 @@ class VideoProjectResponse(BaseModel):
     status: VideoProjectStatus
     duration_seconds: float | None = None
     error_message: str | None = None
+    description: str | None = None
+    shorts_count: int | None = None
     target_clip_length: ClipLength
     framing_mode: ClipFraming
     caption_style: ClipCaptionStyle

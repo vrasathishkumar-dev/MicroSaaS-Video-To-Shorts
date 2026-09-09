@@ -16,6 +16,7 @@ import { SettingsPage } from '@/pages/SettingsPage';
 import { VideoDetailPage } from '@/pages/VideoDetailPage';
 import { VideoSubmitPage } from '@/pages/VideoSubmitPage';
 import { VideosPage } from '@/pages/VideosPage';
+import { GeneratePage } from '@/pages/GeneratePage';
 
 /**
  * Top-level route table. Every module's pages are wired in here rather
@@ -70,6 +71,14 @@ export default function App() {
             element={
               <ProtectedRoute>
                 <VideoSubmitPage />
+              </ProtectedRoute>
+            }
+          />
+          <Route
+            path="/generate"
+            element={
+              <ProtectedRoute>
+                <GeneratePage />
               </ProtectedRoute>
             }
           />

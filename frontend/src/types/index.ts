@@ -15,13 +15,14 @@ export interface User {
   is_admin: boolean;
 }
 
-export type VideoSourceType = 'upload' | 'url';
+export type VideoSourceType = 'upload' | 'url' | 'text';
 
 export type VideoProjectStatus =
   | 'pending'
   | 'downloading'
   | 'transcribing'
   | 'analyzing'
+  | 'generating'
   | 'ready'
   | 'failed';
 
@@ -36,6 +37,10 @@ export interface VideoProject {
   status: VideoProjectStatus;
   duration_seconds: number | null;
   error_message: string | null;
+  /** Description or prompt provided when generated from idea/text. */
+  description?: string | null;
+  /** Number of shorts targeted when generated from text. */
+  shorts_count?: number | null;
   /**
    * What the submitter asked for. The length shapes how highlights are cut;
    * framing, captions and B-roll become every generated clip's own settings.

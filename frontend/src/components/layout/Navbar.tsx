@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import {
-  Film,
+  Clapperboard,
   LayoutDashboard,
   LogOut,
   Menu,
@@ -8,6 +8,7 @@ import {
   Settings,
   User,
   Video,
+  Wand2,
   X,
 } from 'lucide-react';
 import { Link, useLocation, useNavigate } from 'react-router-dom';
@@ -36,12 +37,16 @@ const NAV_LINKS: NavLinkItem[] = [
     label: 'Clips',
     icon: <Scissors className="h-4 w-4" />,
   },
+  {
+    to: '/generate',
+    label: 'AI Generator',
+    icon: <Wand2 className="h-4 w-4" />,
+  },
 ];
 
 /**
  * Persistent top navigation bar for authenticated pages.
- * Glassmorphic design matching the app's visual language.
- * Collapses to a hamburger menu on mobile viewports.
+ * Restream-inspired: dark sticky nav, semi-transparent, clean layout.
  */
 export function Navbar() {
   const { user, logout } = useAuth();
@@ -66,18 +71,32 @@ export function Navbar() {
     : user.email[0].toUpperCase();
 
   return (
-    <nav className="sticky top-0 z-50 border-b border-glass-border bg-glass-bg backdrop-blur-xl">
-      <div className="mx-auto flex h-16 max-w-7xl items-center justify-between px-4 sm:px-6">
-        {/* Logo */}
+    <nav
+      className="sticky top-0 z-50 transition-all duration-500"
+      style={{
+        backgroundColor: 'oklch(0.08 0.025 264 / 92%)',
+        backdropFilter: 'blur(20px)',
+        borderBottom: '1px solid oklch(1 0 0 / 8%)',
+      }}
+    >
+      <div className="mx-auto flex h-16 max-w-[1344px] items-center justify-between px-6 lg:px-8">
+        {/* ── Logo ── */}
         <Link
           to="/dashboard"
-          className="flex items-center gap-2 text-lg font-bold text-foreground transition-colors hover:text-primary"
+          className="flex items-center gap-2.5 text-[15px] font-semibold text-foreground transition-opacity hover:opacity-80"
         >
-          <Film className="h-6 w-6 text-primary" />
-          <span className="hidden sm:inline">VideoToShorts</span>
+          <div
+            className="flex h-8 w-8 items-center justify-center rounded-lg"
+            style={{ backgroundColor: 'oklch(0.60 0.20 264)' }}
+          >
+            <Clapperboard className="h-4 w-4 text-white" />
+          </div>
+          <span>
+            Video<span style={{ color: 'oklch(0.60 0.20 264)' }}>ToShorts</span>
+          </span>
         </Link>
 
-        {/* Desktop nav links */}
+        {/* ── Desktop nav ── */}
         <div className="hidden items-center gap-1 md:flex">
           {NAV_LINKS.map((link) => {
             const isActive =
@@ -88,7 +107,7 @@ export function Navbar() {
                 key={link.to}
                 to={link.to}
                 className={cn(
-                  'flex items-center gap-2 rounded-lg px-3 py-2 text-sm font-medium transition-all duration-200',
+                  'flex items-center gap-2 rounded-lg px-3.5 py-2 text-sm font-medium transition-all duration-200',
                   isActive
                     ? 'bg-primary/10 text-primary'
                     : 'text-muted-foreground hover:bg-accent hover:text-foreground',
@@ -101,9 +120,9 @@ export function Navbar() {
           })}
         </div>
 
-        {/* Right side: user menu + mobile toggle */}
+        {/* ── Right side ── */}
         <div className="flex items-center gap-3">
-          {/* User dropdown (desktop) */}
+          {/* User avatar dropdown (desktop) */}
           <div className="relative hidden md:block">
             <UserMenu
               initials={initials}
@@ -112,7 +131,7 @@ export function Navbar() {
             />
           </div>
 
-          {/* Mobile hamburger */}
+          {/* Mobile toggle */}
           <button
             type="button"
             onClick={() => setIsMobileOpen(!isMobileOpen)}
@@ -128,9 +147,12 @@ export function Navbar() {
         </div>
       </div>
 
-      {/* Mobile nav */}
+      {/* ── Mobile nav panel ── */}
       {isMobileOpen && (
-        <div className="border-t border-glass-border bg-glass-bg px-4 pb-4 pt-2 backdrop-blur-xl md:hidden">
+        <div
+          className="border-t px-4 pb-5 pt-3 md:hidden"
+          style={{ borderColor: 'oklch(1 0 0 / 8%)' }}
+        >
           <div className="flex flex-col gap-1">
             {NAV_LINKS.map((link) => {
               const isActive =
@@ -142,7 +164,7 @@ export function Navbar() {
                   to={link.to}
                   onClick={() => setIsMobileOpen(false)}
                   className={cn(
-                    'flex items-center gap-2 rounded-lg px-3 py-2.5 text-sm font-medium transition-all',
+                    'flex items-center gap-2.5 rounded-lg px-3 py-2.5 text-sm font-medium transition-all',
                     isActive
                       ? 'bg-primary/10 text-primary'
                       : 'text-muted-foreground hover:bg-accent hover:text-foreground',
@@ -153,11 +175,16 @@ export function Navbar() {
                 </Link>
               );
             })}
-            <hr className="my-2 border-glass-border" />
+
+            <div
+              className="my-2 border-t"
+              style={{ borderColor: 'oklch(1 0 0 / 8%)' }}
+            />
+
             <Link
               to="/profile"
               onClick={() => setIsMobileOpen(false)}
-              className="flex items-center gap-2 rounded-lg px-3 py-2.5 text-sm font-medium text-muted-foreground hover:bg-accent hover:text-foreground"
+              className="flex items-center gap-2.5 rounded-lg px-3 py-2.5 text-sm font-medium text-muted-foreground hover:bg-accent hover:text-foreground"
             >
               <User className="h-4 w-4" />
               Profile
@@ -165,7 +192,7 @@ export function Navbar() {
             <Link
               to="/settings"
               onClick={() => setIsMobileOpen(false)}
-              className="flex items-center gap-2 rounded-lg px-3 py-2.5 text-sm font-medium text-muted-foreground hover:bg-accent hover:text-foreground"
+              className="flex items-center gap-2.5 rounded-lg px-3 py-2.5 text-sm font-medium text-muted-foreground hover:bg-accent hover:text-foreground"
             >
               <Settings className="h-4 w-4" />
               Settings
@@ -176,7 +203,7 @@ export function Navbar() {
                 setIsMobileOpen(false);
                 void handleLogout();
               }}
-              className="flex w-full items-center gap-2 rounded-lg px-3 py-2.5 text-sm font-medium text-destructive hover:bg-destructive/10"
+              className="flex w-full items-center gap-2.5 rounded-lg px-3 py-2.5 text-sm font-medium text-destructive hover:bg-destructive/10"
             >
               <LogOut className="h-4 w-4" />
               Log out
@@ -189,7 +216,7 @@ export function Navbar() {
 }
 
 /* ------------------------------------------------------------------ */
-/*  User dropdown for desktop                                         */
+/*  User avatar dropdown for desktop                                   */
 /* ------------------------------------------------------------------ */
 function UserMenu({
   initials,
@@ -207,7 +234,8 @@ function UserMenu({
       <button
         type="button"
         onClick={() => setOpen(!open)}
-        className="flex h-9 w-9 items-center justify-center rounded-full bg-gradient-to-br from-gradient-from to-gradient-to text-xs font-bold text-primary-foreground transition-shadow hover:shadow-lg"
+        className="flex h-8 w-8 items-center justify-center rounded-full text-xs font-bold text-white transition-opacity hover:opacity-80"
+        style={{ backgroundColor: 'oklch(0.60 0.20 264)' }}
         aria-label="User menu"
       >
         {initials}
@@ -215,19 +243,31 @@ function UserMenu({
 
       {open && (
         <>
-          {/* Backdrop overlay to close on click-away */}
+          {/* Click-away backdrop */}
           <div
             className="fixed inset-0 z-40"
             onClick={() => setOpen(false)}
             aria-hidden
           />
-          <div className="absolute right-0 z-50 mt-2 w-56 rounded-xl border border-glass-border bg-glass-bg p-1 shadow-xl backdrop-blur-xl">
+          <div
+            className="absolute right-0 z-50 mt-2 w-56 rounded-2xl border p-1.5 shadow-2xl"
+            style={{
+              backgroundColor: 'oklch(0.12 0.02 264)',
+              borderColor: 'oklch(1 0 0 / 10%)',
+            }}
+          >
             <div className="px-3 py-2">
-              <p className="truncate text-sm font-medium text-foreground">
+              <p className="truncate text-xs font-medium text-muted-foreground">
+                Signed in as
+              </p>
+              <p className="truncate text-sm font-medium text-foreground mt-0.5">
                 {email}
               </p>
             </div>
-            <hr className="my-1 border-glass-border" />
+            <div
+              className="my-1 border-t"
+              style={{ borderColor: 'oklch(1 0 0 / 8%)' }}
+            />
             <Link
               to="/profile"
               onClick={() => setOpen(false)}
@@ -244,7 +284,10 @@ function UserMenu({
               <Settings className="h-4 w-4" />
               Settings
             </Link>
-            <hr className="my-1 border-glass-border" />
+            <div
+              className="my-1 border-t"
+              style={{ borderColor: 'oklch(1 0 0 / 8%)' }}
+            />
             <button
               type="button"
               onClick={() => {
