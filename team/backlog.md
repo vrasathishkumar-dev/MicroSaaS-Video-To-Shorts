@@ -9,7 +9,7 @@ Founder = product owner. Two approval gates: **after BA drafts a story**
 (scope approval) and **after Tester signs off** (release approval). Every
 other handoff runs without stopping.
 
-Status values: `needs-approval` → `approved` → `in-design` → `in-dev` →
+Status values: `approved` → `approved` → `in-design` → `in-dev` →
 `in-qa` → `qa-signoff-needed` → `approved-for-release` → `deployed` →
 `done`.
 
@@ -19,6 +19,159 @@ Status values: `needs-approval` → `approved` → `in-design` → `in-dev` →
 
 _(BA appends new stories here. Nothing below this section starts until the
 founder approves it.)_
+
+---
+
+### Gate short generation on virality score >= 50 — sub-50 clips must never render
+
+**Status:** approved
+
+**Priority:** P0 — the founder wants this as a hard content-quality gate:
+today `_REVIEW_THRESHOLD = 50.0` in `backend/app/services/clip_service.py`
+only drives a UI label ("Needs Manual Review"); a low-scoring clip can still
+be exported/downloaded exactly like a high-scoring one. The founder wants
+the number to actually stop bad clips from being rendered, not just flag
+them.
+
+**Module:** Export & Publish (primary — the gate is enforced in
+`POST /clips/{id}/export` in `backend/app/routers/exports.py`, the one place
+a render is ever requested). Touches Clip Library only in that it reuses
+the existing `virality_score` field and `_REVIEW_THRESHOLD` constant already
+shipped there (see the "Clip virality score is fake" story, deployed
+2026-09-06) — no change to how that score is computed. Does not touch Video
+Upload, B-roll Sourcing, or Auth.
+
+As a creator using VideoToShorts to auto-generate Shorts, I want clips that
+score below the platform's virality threshold to never be rendered into an
+exportable video, so that I can't accidentally waste render time or publish
+a low-quality clip the system itself already flagged as weak.
+
+**Context (what already exists — do not re-derive or re-build):**
+- `virality_score` (0-100) is already computed server-side on every clip:
+  a partial score (hook + completeness) at generation time
+  (`create_clips_from_highlights`) and after every boundary edit
+  (`update_clip`), refined with a framing signal once a render succeeds
+  (`refine_clip_with_framing`, called from `video_render.py`). This story
+  does not touch that scoring logic at all.
+- `_REVIEW_THRESHOLD = 50.0` already exists in `clip_service.py` and already
+  mirrors `frontend/src/lib/virality.ts`'s `REVIEW_THRESHOLD`, which currently
+  only controls the "Needs Manual Review" badge color/label. Today nothing
+  stops a sub-50 clip from being exported — the badge is purely advisory.
+- The only place a render is actually triggered is
+  `POST /clips/{id}/export` in `exports.py` (marks the clip `rendering`,
+  enqueues `render_clip` as a background job). `POST /clips/generate`
+  (clip creation) and `PUT /clips/{id}` (trim/caption/framing edits) never
+  render anything themselves.
+- The render pipeline's actual encode settings are already fixed and are
+  **not changed by this story**: 1080x1920 (9:16), `libx264`,
+  `RENDER_CRF = 18`, `RENDER_PRESET = "slow"` (near-lossless quality, small
+  file, per `config.py`), AAC-LC audio at `192k`. "Best video quality" in
+  this story means exactly this existing, unchanged encode target — gating
+  on score is orthogonal to encoding; there is no separate "lower quality"
+  render path today or introduced by this story. A clip that clears the
+  gate renders identically to how it renders today.
+
+**Decisions this story makes (so they aren't left to Designer/Developer to
+improvise, and don't need a founder round-trip):**
+
+1. **What happens to a sub-50 clip:** it is **kept and listed, never
+   rendered, never auto-deleted.** It stays visible in the Clip Library in
+   `draft` status, with its score and `virality_reason` shown, fully
+   editable (title, trim boundaries, framing mode, caption style) and
+   deletable only via the existing explicit `DELETE /clips/{id}` action.
+   Rationale: this app's own existing rule for automatic decisions
+   (`CLAUDE.md`'s B-roll rule: "never lock in an automatic choice") extends
+   naturally here — an automatic score should block an automatic render,
+   not automatically destroy a user's clip. Silently discarding a clip the
+   user didn't ask to delete is a bigger, unrelated behavior change the
+   founder didn't ask for.
+2. **Threshold is fixed at 50, not user-configurable.** Reuses the existing
+   `_REVIEW_THRESHOLD` constant in `clip_service.py` as the single source of
+   truth for both the gate and the UI label — no new per-user setting, env
+   var, or request parameter to change it. There is no existing
+   settings/preferences surface in this app to hang a per-user override off
+   of, and introducing one is materially more scope than "gate at 50." If
+   real usage shows 50 is miscalibrated, that's a global constant change by
+   the team (as Designer already flagged when the constant was introduced),
+   not a per-user knob — flag to founder as a possible follow-up if it comes
+   up.
+3. **Gate applies at render/export time, not at detection/generation
+   time.** Enforced only inside `POST /clips/{id}/export`, immediately
+   before the clip is marked `rendering` and before B-roll auto-sourcing
+   runs (no wasted work on a blocked request). `POST /clips/generate` is
+   **unchanged** — every draft clip is still created and listed regardless
+   of score. Reasons this is the right point, not generation time:
+   - At generation time only the partial score exists (framing isn't
+     computed until a render happens) — blocking clip *creation* would
+     permanently hide a clip whose framing signal might have pushed it over
+     50, with no way to ever find out.
+   - Boundaries are user-editable after creation, and editing already
+     recomputes `virality_score` (existing `update_clip` behavior). A user
+     can fix a weak cut and push a clip over 50 — blocking at generation
+     time would give them nothing left to act on.
+4. **Score used at the gate check is whatever is currently on the clip**
+   (`clip.virality_score`) at the moment export is requested — partial or
+   already-refined, no special-casing between them.
+5. **Legacy pre-migration clips with `virality_score = NULL`:** computed
+   on-demand at export time (calling the existing, cheap, synchronous
+   `score_clip_partial` — text/pattern matching only, no video decode, safe
+   to run inline in a request handler per `CLAUDE.md`) before the gate check
+   runs, rather than being permanently blocked or permanently exempt.
+6. **No override/bypass in this story.** No query param, header, or setting
+   to force a sub-50 export through. Flagging explicitly as a known
+   limitation, not an oversight: `virality_score` is a heuristic (hook
+   pattern-matching + sentence-boundary check + a binary framing signal),
+   not a guarantee, and a hard, unconditional block means a false-negative
+   score can trap a clip a human would consider fine. If that shows up in
+   practice, a "founder override" affordance would be a natural fast-follow
+   story — out of scope here per the founder's own framing ("never
+   rendered").
+
+**What this is not (non-goals):**
+- No change to how `virality_score`/`hook_score`/`completeness_score`/
+  `framing_score` are computed or weighted — that logic is untouched.
+- No change to the render pipeline's encoding settings/quality.
+- No new `Clip` or `VideoProject` status value — blocked clips stay `draft`,
+  exactly the status they're already in before any export attempt.
+- No bulk re-scoring or bulk deletion job for existing low-scoring clips.
+- No UI redesign beyond whatever error state the frontend already shows for
+  a failed `POST /clips/{id}/export` call (Designer to confirm during spec
+  whether the existing error-toast pattern is sufficient or needs a
+  clip-library-specific message).
+
+**Acceptance criteria:**
+- `POST /clips/{id}/export` on a clip with `virality_score < 50.0` returns
+  `409 Conflict` with a message stating the clip's actual score and the
+  50.0 threshold; the clip's `status` is left unchanged (never transitions
+  to `rendering`), no background render job is enqueued, and B-roll
+  auto-sourcing is not triggered for that request.
+- `POST /clips/{id}/export` on a clip with `virality_score >= 50.0` behaves
+  exactly as it does today — same status transition, same enqueued job,
+  same encode settings, no regression.
+- A clip with `virality_score = NULL` (legacy row) has its partial score
+  computed on demand before the gate check runs at export time — it is
+  neither permanently blocked nor silently exempted from the gate.
+- A blocked clip is never deleted or hidden by this change: it remains
+  visible in the Clip Library in `draft` status, fully editable via
+  `PUT /clips/{id}` and deletable via the existing `DELETE /clips/{id}`.
+- Editing a blocked clip's `start_time`/`end_time` via `PUT /clips/{id}`
+  recomputes `virality_score` (existing behavior, unchanged); if the new
+  score is `>= 50.0`, a subsequent `POST /clips/{id}/export` on the same
+  clip succeeds with no further changes required.
+- `POST /clips/generate` is unchanged: draft clips are created and listed
+  regardless of score; the gate exists only at the export/render call.
+- The 50.0 threshold used by the gate is the same named constant already
+  used for the "Needs Manual Review" UI label (`_REVIEW_THRESHOLD` in
+  `clip_service.py`), not a second, independently-defined number in
+  `exports.py` that could drift out of sync with it.
+- No override/bypass path exists for any user or request to force a sub-50
+  export through.
+- Full backend test suite passes; new tests cover: export blocked below
+  threshold (409, clip status untouched, no job enqueued, no B-roll
+  sourcing triggered), export allowed at/above threshold (no regression),
+  the legacy-null-score on-demand-scoring path, and an edit that raises a
+  blocked clip's score above threshold unblocking a subsequent export
+  attempt.
 
 ---
 
