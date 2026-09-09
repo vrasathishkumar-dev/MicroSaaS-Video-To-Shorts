@@ -205,3 +205,40 @@ docker-compose down -v
 - Use environment variables
 - Set up health checks
 - Enable HTTPS in production
+
+---
+
+## VPS Deployment (main branch)
+
+`main` is the production branch — there is no separate `prod` branch. Deploy
+is CI-triggered, not manual: a push to `main` (only ever from the founder's
+manual merge of a `qa → main` PR — see `CLAUDE.md` → Git Branch Policy) runs
+`.github/workflows/deploy.yml`, which SSHes into the VPS and runs
+`scripts/deploy.sh` there. No SSH credentials are ever handled in a Claude
+session.
+
+### One-time VPS setup (founder does this manually)
+1. `git clone` this repo to `~/videotoshorts` on the VPS, `git checkout main`.
+2. Copy `.env.example` to `.env` in that directory and fill in real values.
+3. Add a deploy key (or a dedicated read-only SSH key) so the VPS can
+   `git fetch origin main` without a password prompt.
+4. Confirm Docker + Docker Compose are installed on the VPS.
+
+### Required GitHub repo secrets
+Set these under Settings → Secrets and variables → Actions:
+- `VPS_HOST` — the server's IP or hostname
+- `VPS_USER` — the SSH user to deploy as
+- `VPS_SSH_KEY` — private key with access to that user (paste the key
+  contents, never the passphrase)
+- `VPS_PORT` — SSH port (usually `22`)
+
+### Rollback
+```bash
+# On the VPS, in ~/videotoshorts:
+git log --oneline -5          # find the last-known-good commit on main
+git reset --hard <commit-sha>
+docker compose build && docker compose up -d
+docker compose exec -T api alembic downgrade -1   # only if that release added a migration
+```
+Or simpler: revert the bad commit on `main` on GitHub and push — that
+re-triggers `deploy.yml` with the reverted code.

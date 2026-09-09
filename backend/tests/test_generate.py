@@ -4,19 +4,23 @@ from __future__ import annotations
 
 from unittest.mock import patch
 
-import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy.orm import Session
 
-from app.models.clip import Clip, ClipStatus
-from app.models.video_project import SourceType, VideoProject, VideoProjectStatus
-from app.services.text_generation import generate_script, _heuristic_generate, _extract_keywords
+from app.services.text_generation import _extract_keywords, _heuristic_generate, generate_script
 
 
 def test_keyword_extractor() -> None:
     """Keyword extraction should rank meaningful nouns and filter stopwords."""
-    keywords = _extract_keywords("Top 5 Monkey Facts: monkeys love swinging in jungle trees and eating fruits")
-    assert "monkeys" in keywords or "monkey" in keywords or "jungle" in keywords or "fruits" in keywords
+    keywords = _extract_keywords(
+        "Top 5 Monkey Facts: monkeys love swinging in jungle trees and eating fruits"
+    )
+    assert (
+        "monkeys" in keywords
+        or "monkey" in keywords
+        or "jungle" in keywords
+        or "fruits" in keywords
+    )
     assert "and" not in keywords
     assert "the" not in keywords
 
@@ -51,7 +55,10 @@ def test_generate_from_text_endpoint(
             headers=auth_headers,
             json={
                 "title": "Top 5 Monkey Facts",
-                "description": "Fascinating facts about wild monkeys including high intelligence, tool use, social hierarchies, agility, and surprising traits.",
+                "description": (
+                    "Fascinating facts about wild monkeys including high intelligence, tool "
+                    "use, social hierarchies, agility, and surprising traits."
+                ),
                 "shorts_count": 3,
                 "caption_style": "hormozi",
                 "auto_broll": True,
@@ -108,14 +115,20 @@ def test_story_script_structure() -> None:
     for seg in segments:
         words = seg.narration.split()
         assert len(words) >= 50, f"Narration should be a rich story (got {len(words)} words)"
-        assert len(seg.keywords) >= 3, f"Must have at least 3 scene keywords (got {len(seg.keywords)})"
+        assert (
+            len(seg.keywords) >= 3
+        ), f"Must have at least 3 scene keywords (got {len(seg.keywords)})"
 
 
 def test_voice_synthesis_fallback(tmp_path) -> None:
     """Voice synthesis generates audio file and timed subtitle events."""
-    from app.services.voice_synthesis import _estimate_sentence_timings, _break_into_punchy_subtitles
+    from app.services.voice_synthesis import (
+        _estimate_sentence_timings,
+    )
 
-    text = "Did you know that monkeys use tools? In the wild, they hammer palm nuts with heavy stones."
+    text = (
+        "Did you know that monkeys use tools? In the wild, they hammer palm nuts with heavy stones."
+    )
     events = _estimate_sentence_timings(text, 30.0)
     assert len(events) >= 2
     for start, end, phrase in events:

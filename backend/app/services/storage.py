@@ -7,6 +7,7 @@ path via `get_file_path()`.
 """
 
 import asyncio
+import contextlib
 import ipaddress
 import logging
 import re
@@ -88,7 +89,10 @@ def _download_via_ytdlp(url: str, target_dir: Path, filename_stem: str) -> Path:
         raise ValidationAppError("yt-dlp is not installed")
     outtmpl = str(target_dir / f"{filename_stem}.%(ext)s")
     ydl_opts = {
-        "format": "bestvideo[height<=1080][ext=mp4]+bestaudio[ext=m4a]/bestvideo[height<=1080]+bestaudio/best[height<=1080][ext=mp4]/best",
+        "format": (
+            "bestvideo[height<=1080][ext=mp4]+bestaudio[ext=m4a]/"
+            "bestvideo[height<=1080]+bestaudio/best[height<=1080][ext=mp4]/best"
+        ),
         "merge_output_format": "mp4",
         "outtmpl": outtmpl,
         "quiet": True,
@@ -110,14 +114,13 @@ def _download_via_ytdlp(url: str, target_dir: Path, filename_stem: str) -> Path:
             return actual_path
     except Exception as exc:
         for partial in target_dir.glob(f"{filename_stem}.*"):
-            try:
+            with contextlib.suppress(Exception):
                 partial.unlink(missing_ok=True)
-            except Exception:
-                pass
         err_msg = str(exc)
         if "No space left on device" in err_msg or "Errno 28" in err_msg:
             raise ValidationAppError(
-                "Device ran out of storage space while downloading this video. Please free up some disk space."
+                "Device ran out of storage space while downloading this video. "
+                "Please free up some disk space."
             ) from exc
         raise
 

@@ -1,0 +1,23 @@
+name: Deploy to VPS
+
+# Fires only on a push to main -- which only happens when the founder
+# manually merges the qa -> main PR on GitHub (see CLAUDE.md -> Git Branch
+# Policy; main is the production branch, there is no separate prod branch).
+# No agent merges into main, so this is the sole deploy trigger.
+on:
+  push:
+    branches: [main]
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: SSH and deploy
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USER }}
+          key: ${{ secrets.VPS_SSH_KEY }}
+          port: ${{ secrets.VPS_PORT }}
+          script: |
+            bash ~/videotoshorts/scripts/deploy.sh

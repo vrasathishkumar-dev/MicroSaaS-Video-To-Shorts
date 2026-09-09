@@ -298,3 +298,37 @@ re-asks a prior role's questions.
    `designer`/build until approved.
 2. After `tester` signs off (founder approves release) — do not dispatch
    `devops` until approved.
+
+---
+
+## Git Branch Policy
+
+Two long-lived branches sit downstream of feature work; `main` itself is the
+production branch — there is no separate `prod` branch.
+Convention-enforced (no GitHub branch-protection rules configured) — agents
+follow this by instruction, not by a technical block.
+
+```
+feature/<story-slug> → dev → qa → main
+   (dev agents)      (dev agents  (tester   (human founder
+                       merge)      merges)    merges — only)
+```
+
+- **`dev`** — integration branch. `backend-agent` / `frontend-agent` /
+  `database-agent` commit to a `feature/<story-slug>` branch and may open
+  *and merge* their own PR into `dev` once their self-checks pass (tests,
+  lint/type-check). No gate here — this is where agents move fast.
+- **`qa`** — QA-gated branch. `tester` pulls `dev`, runs the test plan from
+  `team/backlog.md`'s acceptance criteria, and only on a pass opens a
+  `dev → qa` PR, runs the `/code-review` skill against the diff as the PR
+  review step, and merges it itself.
+- **`main`** — production / deploy source. After the founder's release
+  sign-off (governance gate 2 above), `tester` or the orchestrator opens the
+  `qa → main` PR — but **only the human founder merges it**, on GitHub,
+  manually. No agent, including `devops`, merges into `main`.
+- A push to `main` (i.e. that human merge) triggers
+  `.github/workflows/deploy.yml`, which deploys to the VPS. See
+  `skills/DEPLOYMENT.md` → "VPS Deployment (main branch)" for the mechanics
+  and required secrets. `devops` maintains that workflow and the deploy
+  script but never holds VPS credentials in a session — deploy secrets live
+  only in GitHub's repo settings.

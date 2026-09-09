@@ -333,8 +333,10 @@ def detect_highlights(segments: list[TranscriptSegment]) -> list[TranscriptSegme
             b_start = min_time + b * bucket_size
             b_end = min_time + (b + 1) * bucket_size
             bucket_segs = [
-                s for s in segments
-                if (s.start_time >= b_start and s.start_time < b_end) or (s.end_time > b_start and s.end_time <= b_end)
+                s
+                for s in segments
+                if (s.start_time >= b_start and s.start_time < b_end)
+                or (s.end_time > b_start and s.end_time <= b_end)
             ]
             if bucket_segs:
                 best_in_bucket = max(bucket_segs, key=lambda s: s.highlight_score or 0.0)
