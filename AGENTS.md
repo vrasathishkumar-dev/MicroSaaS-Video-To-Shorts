@@ -87,3 +87,17 @@ until the founder approves. No build card may be created for an unapproved idea.
 - Reports to the founder go to Telegram:
   `/usr/local/bin/hermes send -t telegram -s '<subject>' -f <file>`
   (use the absolute path — a bare `hermes` exits 126 on the worker PATH).
+
+## Running the backend tests (from any worktree)
+
+The Python venv lives OUTSIDE git, so a worktree has no `.venv` of its own.
+Always call it by absolute path, from the worktree's own `backend/` dir:
+
+```bash
+cd <your-worktree>/backend
+/srv/microsaas-video-to-shorts/backend/.venv/bin/pytest -q
+```
+
+Verified baseline on 2026-09-09: **281 passed, 0 failed** (~3 min). If you see
+"missing sqlalchemy" or similar, you used the wrong python - re-read the line
+above. Never report a test result you did not actually run.
