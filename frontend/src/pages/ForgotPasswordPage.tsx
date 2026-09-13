@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import type { FormEvent } from 'react';
 import { Link } from 'react-router-dom';
-import { Mail } from 'lucide-react';
+import { Mail, Loader2 } from 'lucide-react';
 import { GlassCard } from '@/components/ui/GlassCard';
 import { GradientButton } from '@/components/ui/GradientButton';
 import { PageWrapper } from '@/components/ui/PageWrapper';
@@ -17,12 +17,16 @@ function isValidEmail(value: string): boolean {
  * built yet, so this only validates the address client-side and shows
  * a "check your email" success state — no request is sent.
  */
+import { forgotPassword } from '@/services/authService';
+
 export function ForgotPasswordPage() {
   const [email, setEmail] = useState('');
   const [error, setError] = useState<string | undefined>(undefined);
+  const [isLoading, setIsLoading] = useState(false);
   const [isSubmitted, setIsSubmitted] = useState(false);
+  const [responseMessage, setResponseMessage] = useState<string | null>(null);
 
-  function handleSubmit(event: FormEvent<HTMLFormElement>) {
+  async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (!email.trim()) {
       setError('Email is required.');
@@ -33,7 +37,21 @@ export function ForgotPasswordPage() {
       return;
     }
     setError(undefined);
-    setIsSubmitted(true);
+    setIsLoading(true);
+
+    try {
+      const res = await forgotPassword(email.trim());
+      setResponseMessage(res.message);
+      setIsSubmitted(true);
+    } catch (err: unknown) {
+      const msg =
+        err && typeof err === 'object' && 'response' in err
+          ? (err as { response?: { data?: { detail?: string } } }).response?.data?.detail
+          : undefined;
+      setError(msg || 'Failed to request password reset. Please try again.');
+    } finally {
+      setIsLoading(false);
+    }
   }
 
   return (
@@ -42,11 +60,26 @@ export function ForgotPasswordPage() {
       <GlassCard className="w-full max-w-sm">
         {isSubmitted ? (
           <>
-            <h1 className="text-xl font-semibold">Check your email</h1>
+            <h1 className="text-xl font-semibold">Check Server Console</h1>
             <p className="mt-2 text-sm text-muted-foreground">
-              If an account exists for <span className="font-medium text-foreground">{email}</span>,
-              we&apos;ve sent instructions to reset your password.
+              {responseMessage ||
+                `If an account exists for ${email}, a reset link has been generated.`}
             </p>
+            <div className="mt-4 rounded-xl border border-primary/20 bg-primary/5 p-3 text-xs text-muted-foreground space-y-2">
+              <p className="font-medium text-foreground">Personal Use Notice:</p>
+              <p>
+                The reset URL is logged directly in your <strong>uvicorn server terminal</strong>.
+                Copy the link starting with <code className="text-primary font-mono">/reset-password?token=...</code> to continue.
+              </p>
+            </div>
+            <div className="mt-4">
+              <Link
+                to="/reset-password"
+                className="block text-center text-xs text-primary hover:underline"
+              >
+                Already have a reset token? Enter it here &rarr;
+              </Link>
+            </div>
           </>
         ) : (
           <>
@@ -78,8 +111,9 @@ export function ForgotPasswordPage() {
                 </div>
                 {error && <p className="mt-1 text-sm text-destructive">{error}</p>}
               </div>
-              <GradientButton type="submit" className="w-full">
-                Send reset link
+              <GradientButton type="submit" disabled={isLoading} className="w-full flex items-center justify-center gap-2">
+                {isLoading && <Loader2 className="h-4 w-4 animate-spin" />}
+                {isLoading ? 'Sending request...' : 'Send reset link'}
               </GradientButton>
             </form>
           </>

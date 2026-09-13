@@ -8,6 +8,8 @@ Clip Library router's /clips, /clips/{id}, /clips/{id}/reorder paths.
 
 from __future__ import annotations
 
+import asyncio
+
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy.orm import Session
 
@@ -18,7 +20,13 @@ from app.models.broll_asset import BrollAsset, BrollSource
 from app.models.clip import Clip
 from app.models.user import User
 from app.schemas.broll import BrollAssetResponse, BrollInsertRequest, BrollSearchResult
-from app.services.broll_sourcing import auto_source_broll, search_pexels, search_pixabay
+from app.services.broll_sourcing import (
+    auto_source_broll,
+    search_internet_archive,
+    search_pexels,
+    search_pixabay,
+    search_wikimedia,
+)
 
 router = APIRouter(tags=["broll"])
 
@@ -74,7 +82,11 @@ async def search_broll(
 ) -> list[dict]:
     """Search stock footage providers for `q`. Does not write to the DB.
 
-    Searches both Pexels and Pixabay unless `source` narrows to one.
+    Searches Pexels, Pixabay, Wikimedia Commons, and Internet Archive
+    unless `source` narrows to one specific provider.
+    Wikimedia and Internet Archive return CC-licensed or public-domain footage
+    — the copyright-safe alternatives for content published to platforms
+    that enforce Content ID.
     """
 
     rate_limit_broll(current_user.id)
@@ -83,10 +95,21 @@ async def search_broll(
         return await search_pexels(q)
     if source == BrollSource.pixabay:
         return await search_pixabay(q)
+    if source == BrollSource.wikimedia:
+        return await search_wikimedia(q)
+    if source == BrollSource.internet_archive:
+        return await search_internet_archive(q)
 
-    pexels_results = await search_pexels(q)
-    pixabay_results = await search_pixabay(q)
-    return [*pexels_results, *pixabay_results]
+    # No source filter: search all four providers and merge results.
+    pexels_results, pixabay_results, wikimedia_results, archive_results = (
+        await asyncio.gather(
+            search_pexels(q),
+            search_pixabay(q),
+            search_wikimedia(q),
+            search_internet_archive(q),
+        )
+    )
+    return [*pexels_results, *pixabay_results, *wikimedia_results, *archive_results]
 
 
 @router.post("/clips/{clip_id}/broll", response_model=BrollAssetResponse)

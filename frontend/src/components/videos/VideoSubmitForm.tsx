@@ -1,8 +1,11 @@
 import type { AxiosError, AxiosProgressEvent } from 'axios';
 import { useState, useRef } from 'react';
 import {
+  AlertCircle,
+  AlertTriangle,
   Upload,
   Link as LinkIcon,
+  ShieldCheck,
   Sparkles,
   Tv,
   Film,
@@ -17,6 +20,7 @@ import type {
   ApiError,
   CaptionStylePreset,
   ClipLength,
+  CopyrightDeclaration,
   FramingMode,
   VideoProject,
   VideoSourceType,
@@ -35,6 +39,30 @@ const PLATFORMS = [
   { name: 'Vimeo', icon: Film, example: 'https://vimeo.com/...' },
 ];
 
+/** Domains known to be broadcast/TV/sports — highest Content ID risk. */
+const BROADCAST_DOMAINS = [
+  'espn.com', 'nba.com', 'nfl.com', 'nhl.com', 'mlb.com',
+  'bbc.co.uk', 'bbc.com', 'cnn.com', 'foxnews.com', 'nbcnews.com',
+  'abcnews.go.com', 'cbsnews.com', 'sky.com', 'eurosport.com',
+  'f1.com', 'uefa.com', 'fifa.com', 'olympics.com',
+];
+
+function isBroadcastUrl(url: string): boolean {
+  try {
+    const hostname = new URL(url).hostname.replace('www.', '');
+    return BROADCAST_DOMAINS.some((d) => hostname === d || hostname.endsWith('.' + d));
+  } catch {
+    return false;
+  }
+}
+
+const COPYRIGHT_OPTIONS: { value: CopyrightDeclaration; label: string; hint: string }[] = [
+  { value: 'own_content',   label: 'I own this content',             hint: 'You filmed, produced, or have full rights to this footage.' },
+  { value: 'licensed',      label: 'I have a licence',               hint: 'You have written permission from the rights holder.' },
+  { value: 'public_domain', label: 'Public domain / Creative Commons', hint: 'CC0, government work, archive.org, Wikimedia Commons, etc.' },
+  { value: 'fair_use',      label: 'Fair use — commentary / criticism', hint: 'You are adding substantial editorial commentary to third-party content.' },
+];
+
 export function VideoSubmitForm({ onSuccess }: VideoSubmitFormProps) {
   const [mode, setMode] = useState<SubmitMode>('url');
   const [title, setTitle] = useState('');
@@ -49,6 +77,7 @@ export function VideoSubmitForm({ onSuccess }: VideoSubmitFormProps) {
   const [subtitleStyle, setSubtitleStyle] = useState<CaptionStylePreset>('hormozi');
   const [framingMode, setFramingMode] = useState<FramingMode>('speaker_focus');
   const [autoBroll, setAutoBroll] = useState(true);
+  const [copyrightDeclaration, setCopyrightDeclaration] = useState<CopyrightDeclaration | null>(null);
 
   const fileInputRef = useRef<HTMLInputElement>(null);
 
@@ -98,6 +127,7 @@ export function VideoSubmitForm({ onSuccess }: VideoSubmitFormProps) {
           framingMode,
           captionStyle: subtitleStyle,
           autoBroll,
+          copyrightDeclaration,
         },
         (progressEvent: AxiosProgressEvent) => {
           if (progressEvent.total) {
@@ -253,7 +283,7 @@ export function VideoSubmitForm({ onSuccess }: VideoSubmitFormProps) {
             ) : (
               <div className="space-y-1">
                 <p className="text-sm font-medium text-foreground">
-                  Drag & drop your video file here, or browse
+                  Drag &amp; drop your video file here, or browse
                 </p>
                 <p className="text-xs text-muted-foreground">
                   MP4, MOV, MKV, or WEBM up to 2GB
@@ -263,6 +293,92 @@ export function VideoSubmitForm({ onSuccess }: VideoSubmitFormProps) {
           </div>
         </div>
       )}
+
+      {/* --- Copyright Declaration --- */}
+      <div className="flex flex-col gap-2">
+        <label className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">
+          Content Ownership
+        </label>
+        <div className="grid grid-cols-1 gap-1.5">
+          {COPYRIGHT_OPTIONS.map((opt) => (
+            <button
+              key={opt.value}
+              type="button"
+              id={`copyright-${opt.value}`}
+              onClick={() => setCopyrightDeclaration(opt.value === copyrightDeclaration ? null : opt.value)}
+              className={cn(
+                'flex items-start gap-3 rounded-xl border px-3 py-2.5 text-left transition-all',
+                copyrightDeclaration === opt.value
+                  ? opt.value === 'fair_use'
+                    ? 'border-amber-500/60 bg-amber-500/10 text-foreground'
+                    : 'border-primary/60 bg-primary/10 text-foreground'
+                  : 'border-glass-border bg-background/40 text-muted-foreground hover:border-primary/30 hover:text-foreground',
+              )}
+            >
+              <span className={cn(
+                'mt-0.5 flex h-4 w-4 shrink-0 items-center justify-center rounded-full border-2 transition-colors',
+                copyrightDeclaration === opt.value
+                  ? 'border-primary bg-primary'
+                  : 'border-muted-foreground/40',
+              )}>
+                {copyrightDeclaration === opt.value && (
+                  <span className="h-1.5 w-1.5 rounded-full bg-white" />
+                )}
+              </span>
+              <span className="flex flex-col gap-0.5">
+                <span className="text-xs font-medium">{opt.label}</span>
+                <span className="text-[11px] text-muted-foreground">{opt.hint}</span>
+              </span>
+            </button>
+          ))}
+        </div>
+
+        {/* Content ID risk warning: fair-use + URL source */}
+        {mode === 'url' && copyrightDeclaration === 'fair_use' && !isBroadcastUrl(sourceUrl) && (
+          <div className="flex items-start gap-2.5 rounded-xl border border-amber-500/40 bg-amber-500/10 px-3 py-2.5">
+            <AlertCircle className="mt-0.5 h-4 w-4 shrink-0 text-amber-500" />
+            <div className="space-y-0.5">
+              <p className="text-xs font-semibold text-amber-500">Content ID risk</p>
+              <p className="text-[11px] text-muted-foreground leading-relaxed">
+                YouTube&rsquo;s automated Content ID system may flag this clip even when fair use
+                applies legally. &ldquo;Under 30 seconds&rdquo; is not a legal safe harbour &mdash;
+                transformative commentary is what matters. A Content ID claim is not a strike: it
+                doesn&rsquo;t affect your channel; you can dispute it if flagged.
+              </p>
+            </div>
+          </div>
+        )}
+
+        {/* Broadcast/TV high-risk warning */}
+        {mode === 'url' && sourceUrl && isBroadcastUrl(sourceUrl) && (
+          <div className="flex items-start gap-2.5 rounded-xl border border-destructive/40 bg-destructive/10 px-3 py-2.5">
+            <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-destructive" />
+            <div className="space-y-0.5">
+              <p className="text-xs font-semibold text-destructive">High Content ID risk</p>
+              <p className="text-[11px] text-muted-foreground leading-relaxed">
+                This URL appears to be from a broadcast or sports network. These sources are the most
+                heavily fingerprinted on YouTube &mdash; expect an immediate Content ID match on any
+                export. Consider using footage you own, or copyright-safe B-roll from Wikimedia
+                Commons or the Internet Archive instead.
+              </p>
+            </div>
+          </div>
+        )}
+
+        {/* Safe declaration confirmation */}
+        {(copyrightDeclaration === 'own_content' ||
+          copyrightDeclaration === 'public_domain' ||
+          copyrightDeclaration === 'licensed') && (
+          <div className="flex items-center gap-2 rounded-xl border border-emerald-500/30 bg-emerald-500/10 px-3 py-2">
+            <ShieldCheck className="h-4 w-4 shrink-0 text-emerald-500" />
+            <p className="text-[11px] text-emerald-500">
+              {copyrightDeclaration === 'own_content' && 'Your content \u2014 lowest risk of Content ID claims.'}
+              {copyrightDeclaration === 'licensed' && 'Licensed content \u2014 your licence should cover reuse.'}
+              {copyrightDeclaration === 'public_domain' && 'Public domain / CC \u2014 no Content ID risk from the source footage.'}
+            </p>
+          </div>
+        )}
+      </div>
 
       {/* AI Settings Toggle */}
       <div className="rounded-xl border border-glass-border bg-glass-bg p-3 backdrop-blur-md">

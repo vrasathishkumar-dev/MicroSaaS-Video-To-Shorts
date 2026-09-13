@@ -17,8 +17,9 @@ import logging
 import re
 from pathlib import Path
 
-from fastapi import APIRouter, BackgroundTasks, Depends
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query
 from fastapi.responses import FileResponse
+from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from app.config import settings
@@ -27,6 +28,7 @@ from app.exceptions import NotFoundError, ValidationAppError
 from app.models.broll_asset import BrollAsset
 from app.models.clip import Clip, ClipStatus
 from app.models.user import User
+from app.models.video_project import VideoProject
 from app.schemas.export import (
     CaptionFrame,
     ClipCaptionsResponse,
@@ -38,13 +40,23 @@ from app.schemas.export import (
 from app.services import task_queue
 from app.services.broll_sourcing import auto_source_broll
 from app.services.caption_render import CAPTION_STYLES, caption_frames
+from app.services.clip_service import score_clip_partial
 from app.services.reframe import SpeakerWindow, compute_speaker_framing
 from app.services.storage import get_file_path
 from app.services.video_render import _caption_events, render_clip
 
+# Below this composite virality score a clip shows a soft-warning dialog
+# before export -- mirrors frontend/src/lib/virality.ts REVIEW_THRESHOLD.
+_EXPORT_SCORE_THRESHOLD = 50.0
+
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/clips", tags=["export"])
+
+# Second router for /videos-prefixed export operations (batch export).
+# Kept in this file rather than videos.py to respect module ownership: all
+# clip export logic lives here, not in the Clip Library or Videos module.
+videos_router = APIRouter(prefix="/videos", tags=["export"])
 
 _UNSAFE_FILENAME_CHARS = re.compile(r"[^A-Za-z0-9._-]+")
 
@@ -110,6 +122,15 @@ async def export_clip(
     background_tasks: BackgroundTasks,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
+    force: bool = Query(
+        False,
+        description=(
+            "Set true to bypass the soft virality-score gate and export "
+            "even when the clip scores below the review threshold. The gate "
+            "is advisory-only for personal use; the frontend sends force=true "
+            "after the user confirms the warning dialog."
+        ),
+    ),
 ) -> ExportStatusResponse:
     """Kick off rendering a clip into an exportable, downloadable MP4.
 
@@ -118,9 +139,43 @@ async def export_clip(
     BackgroundTasks locally) so this request returns immediately -- per
     CLAUDE.md, long video processing must never run synchronously in a
     request handler. Poll GET /clips/{id}/export/status for completion.
+
+    Score gate: if the clip's virality score is below 50 and `force` is not
+    set, a 409 is returned with the score so the frontend can show a soft
+    confirmation dialog. Passing `?force=true` bypasses this check.
+    Null-scored clips (pre-migration rows) are scored inline first so the
+    gate always has a real number to compare against.
     """
 
     clip = _get_owned_clip(db, clip_id, current_user.id)
+
+    # Score any clip that slipped through without one (legacy/pre-migration
+    # rows, clips whose first edit pre-dates the scoring service).
+    if clip.virality_score is None:
+        segments = clip.video_project.transcript_segments if clip.video_project else []
+        score_clip_partial(clip, segments)
+        db.commit()
+        db.refresh(clip)
+
+    below_threshold = (
+        clip.virality_score is not None
+        and clip.virality_score < _EXPORT_SCORE_THRESHOLD
+    )
+
+    if below_threshold and not force:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "score_below_threshold",
+                "virality_score": clip.virality_score,
+                "threshold": _EXPORT_SCORE_THRESHOLD,
+                "message": (
+                    f"This clip scored {clip.virality_score:.0f}/100, below "
+                    f"the {_EXPORT_SCORE_THRESHOLD:.0f}-point review threshold. "
+                    "Export anyway by passing ?force=true."
+                ),
+            },
+        )
 
     await _ensure_broll(db, clip)
 
@@ -131,7 +186,11 @@ async def export_clip(
     task_queue.enqueue(background_tasks, render_clip, clip.id)
 
     return ExportStatusResponse(
-        clip_id=clip.id, status=clip.status, video_file_path=clip.video_file_path
+        clip_id=clip.id,
+        status=clip.status,
+        video_file_path=clip.video_file_path,
+        virality_score=clip.virality_score,
+        below_threshold=below_threshold,
     )
 
 
@@ -145,7 +204,14 @@ async def get_export_status(
 
     clip = _get_owned_clip(db, clip_id, current_user.id)
     return ExportStatusResponse(
-        clip_id=clip.id, status=clip.status, video_file_path=clip.video_file_path
+        clip_id=clip.id,
+        status=clip.status,
+        video_file_path=clip.video_file_path,
+        virality_score=clip.virality_score,
+        below_threshold=(
+            clip.virality_score is not None
+            and clip.virality_score < _EXPORT_SCORE_THRESHOLD
+        ),
     )
 
 
@@ -361,3 +427,76 @@ async def download_clip(
     filename = f"{safe_title}-{clip.id}.mp4"
 
     return FileResponse(path=path, media_type="video/mp4", filename=filename)
+
+
+# ---------------------------------------------------------------------------
+# Batch export
+# ---------------------------------------------------------------------------
+
+
+class BatchExportResponse(BaseModel):
+    """Summary of how many clips were queued for rendering by export-all."""
+
+    video_project_id: int
+    queued: int
+    already_rendering: int
+    already_ready: int
+
+
+@videos_router.post("/{video_id}/export-all", response_model=BatchExportResponse)
+async def export_all_clips(
+    video_id: int,
+    background_tasks: BackgroundTasks,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> BatchExportResponse:
+    """Enqueue rendering for every draft clip in a video project at once.
+
+    Clips already `rendering` or `ready` are skipped (they are counted in
+    the response but not re-queued). This is designed for the "Export All"
+    action in the Clip Library and Video Detail page -- the user submits
+    once and all their shorts start rendering in the background.
+    """
+
+    project = (
+        db.query(VideoProject)
+        .filter(VideoProject.id == video_id, VideoProject.user_id == current_user.id)
+        .first()
+    )
+    if project is None:
+        raise NotFoundError("Video project")
+
+    clips: list[Clip] = (
+        db.query(Clip)
+        .filter(Clip.video_project_id == video_id, Clip.user_id == current_user.id)
+        .all()
+    )
+
+    queued = 0
+    already_rendering = 0
+    already_ready = 0
+
+    for clip in clips:
+        if clip.status == ClipStatus.ready:
+            already_ready += 1
+        elif clip.status == ClipStatus.rendering:
+            already_rendering += 1
+        else:
+            # Score null-score clips before rendering so the virality badge
+            # is already populated when the user checks on progress.
+            if clip.virality_score is None:
+                segments = project.transcript_segments if project else []
+                score_clip_partial(clip, segments)
+
+            clip.status = ClipStatus.rendering
+            task_queue.enqueue(background_tasks, render_clip, clip.id)
+            queued += 1
+
+    db.commit()
+
+    return BatchExportResponse(
+        video_project_id=video_id,
+        queued=queued,
+        already_rendering=already_rendering,
+        already_ready=already_ready,
+    )

@@ -94,6 +94,12 @@ class TestSearch:
             patch(
                 "app.routers.broll.search_pixabay", new=AsyncMock(return_value=PIXABAY_RESULTS)
             ),
+            patch(
+                "app.routers.broll.search_wikimedia", new=AsyncMock(return_value=[])
+            ),
+            patch(
+                "app.routers.broll.search_internet_archive", new=AsyncMock(return_value=[])
+            ),
         ):
             response = client.get(
                 "/api/v1/broll/search", params={"q": "mountains"}, headers=auth_headers
@@ -140,6 +146,12 @@ class TestSearch:
             ),
             patch(
                 "app.routers.broll.search_pixabay", new=AsyncMock(return_value=PIXABAY_RESULTS)
+            ),
+            patch(
+                "app.routers.broll.search_wikimedia", new=AsyncMock(return_value=[])
+            ),
+            patch(
+                "app.routers.broll.search_internet_archive", new=AsyncMock(return_value=[])
             ),
         ):
             response = client.get(

@@ -17,5 +17,6 @@ class DashboardStatsResponse(BaseModel):
     clips_ready: int
     avg_processing_time_seconds: float | None
     storage_used_bytes: int | None
+    avg_virality_score: float | None = None
 
     model_config = ConfigDict(from_attributes=True)

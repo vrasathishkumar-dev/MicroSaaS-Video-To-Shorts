@@ -126,6 +126,16 @@ async def get_dashboard_stats(
             # Missing/inaccessible file — skip silently, best-effort only.
             continue
 
+    # avg_virality_score: average virality score of clips that have a score
+    avg_score = (
+        db.query(func.avg(Clip.virality_score))
+        .filter(Clip.user_id == user_id, Clip.virality_score.isnot(None))
+        .scalar()
+    )
+    avg_virality_score: float | None = (
+        round(float(avg_score), 1) if avg_score is not None else None
+    )
+
     return DashboardStatsResponse(
         total_videos=total_videos,
         videos_by_status=videos_by_status,
@@ -133,4 +143,5 @@ async def get_dashboard_stats(
         clips_ready=clips_ready,
         avg_processing_time_seconds=avg_processing_time_seconds,
         storage_used_bytes=storage_used_bytes,
+        avg_virality_score=avg_virality_score,
     )

@@ -59,3 +59,35 @@ class UserUpdateRequest(BaseModel):
     """Payload for PUT /auth/me — partial profile update."""
 
     full_name: str | None = Field(default=None, max_length=255)
+
+
+class ForgotPasswordRequest(BaseModel):
+    """Payload for POST /auth/forgot-password."""
+
+    email: EmailStr
+
+
+class ForgotPasswordResponse(BaseModel):
+    """Response for POST /auth/forgot-password.
+
+    Always 200 regardless of whether the email exists, so the endpoint
+    doesn't leak whether an address is registered.
+    """
+
+    message: str = (
+        "If an account with that email exists, a reset link has been logged "
+        "to the server console. Check the uvicorn output for the reset URL."
+    )
+
+
+class ResetPasswordRequest(BaseModel):
+    """Payload for POST /auth/reset-password."""
+
+    token: str
+    new_password: str = Field(min_length=8, max_length=128)
+
+
+class ResetPasswordResponse(BaseModel):
+    """Response for POST /auth/reset-password."""
+
+    message: str = "Password updated successfully. You can now log in with your new password."

@@ -17,10 +17,19 @@ if TYPE_CHECKING:
 
 
 class BrollSource(str, enum.Enum):
-    """Stock footage provider a B-roll asset was sourced from."""
+    """Stock footage provider a B-roll asset was sourced from.
 
-    pexels = "pexels"
-    pixabay = "pixabay"
+    Pexels and Pixabay are commercial stock libraries with free API tiers and
+    their own licences (generally commercial-use-permissive). Wikimedia Commons
+    and the Internet Archive serve CC-licensed or public-domain footage and are
+    the copyright-safe alternatives for content that will be published to
+    platforms that enforce Content ID.
+    """
+
+    pexels           = "pexels"
+    pixabay          = "pixabay"
+    wikimedia        = "wikimedia"        # Wikimedia Commons (CC-licensed / public domain)
+    internet_archive = "internet_archive" # archive.org / Prelinger Archives (CC0 / public domain)
 
 
 class BrollAsset(Base):

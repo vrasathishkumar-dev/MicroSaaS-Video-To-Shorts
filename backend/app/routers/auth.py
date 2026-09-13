@@ -14,8 +14,12 @@ from app.auth.rate_limit import rate_limit_auth
 from app.dependencies import get_current_user, get_db
 from app.models.user import User
 from app.schemas.auth import (
+    ForgotPasswordRequest,
+    ForgotPasswordResponse,
     RefreshRequest,
     RegisterRequest,
+    ResetPasswordRequest,
+    ResetPasswordResponse,
     Token,
     UserResponse,
     UserUpdateRequest,
@@ -82,3 +86,42 @@ async def update_me(
     """Update the profile of the currently authenticated user."""
 
     return auth_service.update_user_profile(db, current_user, payload)
+
+
+@router.post(
+    "/forgot-password",
+    response_model=ForgotPasswordResponse,
+    dependencies=[Depends(rate_limit_auth)],
+)
+async def forgot_password(
+    payload: ForgotPasswordRequest,
+    db: Session = Depends(get_db),
+) -> ForgotPasswordResponse:
+    """Request a password reset link.
+
+    For personal use: the reset URL is printed to the server console
+    (uvicorn stdout) instead of being emailed. Check the terminal for the
+    link. Valid for 1 hour.
+
+    Always returns 200 regardless of whether the email is registered, so
+    the endpoint doesn't leak which addresses have accounts.
+    """
+    auth_service.generate_password_reset_token(db, payload.email)
+    return ForgotPasswordResponse()
+
+
+@router.post(
+    "/reset-password",
+    response_model=ResetPasswordResponse,
+    dependencies=[Depends(rate_limit_auth)],
+)
+async def reset_password(
+    payload: ResetPasswordRequest,
+    db: Session = Depends(get_db),
+) -> ResetPasswordResponse:
+    """Complete a password reset using the token from the console log.
+
+    Raises 401 if the token is invalid, expired, or already used.
+    """
+    auth_service.reset_password(db, payload.token, payload.new_password)
+    return ResetPasswordResponse()

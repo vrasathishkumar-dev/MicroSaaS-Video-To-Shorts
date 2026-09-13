@@ -1,4 +1,4 @@
-import { Clapperboard, Clock3, Film, HardDrive, ListChecks } from 'lucide-react';
+import { Clapperboard, Clock3, Film, Flame, HardDrive, ListChecks } from 'lucide-react';
 import type { ComponentType } from 'react';
 import { GlassCard } from '@/components/ui/GlassCard';
 import { cn } from '@/lib/utils';
@@ -66,13 +66,18 @@ export function StatsWidget({ stats, className }: StatsWidgetProps) {
   return (
     <div
       className={cn(
-        'grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-5',
+        'grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6',
         className,
       )}
     >
       <StatTile label="Total videos" value={String(stats.total_videos)} icon={Film} />
       <StatTile label="Total clips" value={String(stats.total_clips)} icon={Clapperboard} />
       <StatTile label="Clips ready" value={String(stats.clips_ready)} icon={ListChecks} />
+      <StatTile
+        label="Avg virality score"
+        value={stats.avg_virality_score != null ? `${stats.avg_virality_score}/100` : '—'}
+        icon={Flame}
+      />
       <StatTile
         label="Avg. processing time"
         value={formatDuration(stats.avg_processing_time_seconds)}

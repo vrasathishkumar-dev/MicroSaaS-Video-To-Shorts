@@ -17,6 +17,7 @@ const baseVideo: VideoProject = {
   framing_mode: 'speaker_focus',
   caption_style: 'hormozi',
   auto_broll: true,
+  copyright_declaration: null,
   created_at: '2024-01-15T00:00:00Z',
   updated_at: '2024-01-15T00:00:00Z',
 };

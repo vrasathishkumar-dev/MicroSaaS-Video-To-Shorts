@@ -5,18 +5,70 @@ export interface ExportStatusResponse {
   clip_id: number;
   status: 'idle' | 'rendering' | 'ready' | 'failed';
   video_file_path: string | null;
+  /** Server-computed 0-100 virality score, null for unscored legacy clips. */
+  virality_score?: number | null;
+  /** True when virality_score < 50 — used to show the soft-warning dialog. */
+  below_threshold?: boolean;
+}
+
+/** Detail object returned inside a 409 score-gate response. */
+export interface ScoreGateDetail {
+  code: 'score_below_threshold';
+  virality_score: number;
+  threshold: number;
+  message: string;
+}
+
+/** Shape of a 409 score-gate error from the export endpoint. */
+export interface ScoreGateError {
+  isScoreGate: true;
+  detail: ScoreGateDetail;
+}
+
+function isScoreGateError(err: unknown): err is { response: { status: number; data: { detail: ScoreGateDetail } } } {
+  return (
+    typeof err === 'object' &&
+    err !== null &&
+    'response' in err &&
+    typeof (err as { response?: unknown }).response === 'object' &&
+    (err as { response: { status?: number } }).response.status === 409
+  );
 }
 
 /**
  * Kick off (or re-kick off, on retry) export rendering for a clip.
+ *
+ * @param force - When true, bypasses the soft virality score gate and
+ *   renders even if the clip scored below the review threshold. The
+ *   frontend shows a confirmation dialog on a ScoreGateError and calls
+ *   this again with force=true if the user proceeds.
+ *
+ * @throws ScoreGateError when the clip scores below 50 and force is not set.
  */
 export async function triggerExport(
   clipId: number,
+  force = false,
 ): Promise<ExportStatusResponse> {
-  const { data } = await api.post<ExportStatusResponse>(
-    `/clips/${clipId}/export`,
-  );
-  return data;
+  try {
+    const { data } = await api.post<ExportStatusResponse>(
+      `/clips/${clipId}/export${force ? '?force=true' : ''}`,
+    );
+    return data;
+  } catch (err) {
+    if (isScoreGateError(err)) {
+      // Re-throw as a typed ScoreGateError so ExportPanel can distinguish it.
+      const gateErr: ScoreGateError = {
+        isScoreGate: true,
+        detail: err.response.data.detail,
+      };
+      throw gateErr;
+    }
+    throw err;
+  }
+}
+
+export function isScoreGate(err: unknown): err is ScoreGateError {
+  return typeof err === 'object' && err !== null && 'isScoreGate' in err;
 }
 
 /**
@@ -40,6 +92,16 @@ export function getClipDownloadUrl(clipId: number): string {
   const token = getAccessToken();
   const query = token ? `?token=${encodeURIComponent(token)}` : '';
   return `${API_URL}/api/v1/clips/${clipId}/download${query}`;
+}
+
+/**
+ * Build an authenticated SSE URL for the clip's render events stream.
+ * EventSource cannot send custom headers, so the JWT rides the query string.
+ */
+export function getClipEventsUrl(clipId: number): string {
+  const token = getAccessToken();
+  const query = token ? `?token=${encodeURIComponent(token)}` : '';
+  return `${API_URL}/api/v1/clips/${clipId}/events${query}`;
 }
 
 /**
@@ -113,4 +175,19 @@ export async function downloadClip(clipId: number): Promise<void> {
     }
     throw err;
   }
+}
+
+/** Batch export: enqueue rendering for all draft clips in a video project. */
+export interface BatchExportResponse {
+  video_project_id: number;
+  queued: number;
+  already_rendering: number;
+  already_ready: number;
+}
+
+export async function exportAllClips(videoId: number): Promise<BatchExportResponse> {
+  const { data } = await api.post<BatchExportResponse>(
+    `/videos/${videoId}/export-all`,
+  );
+  return data;
 }

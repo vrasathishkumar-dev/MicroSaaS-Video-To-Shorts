@@ -20,7 +20,7 @@ from app.exceptions import (
     app_exception_handler,
     unhandled_exception_handler,
 )
-from app.routers import admin, auth, broll, clips, dashboard, exports, generate, videos
+from app.routers import admin, auth, broll, clips, dashboard, events, exports, generate, videos
 
 logging.basicConfig(
     level=logging.DEBUG if settings.DEBUG else logging.INFO,
@@ -55,6 +55,8 @@ app.include_router(videos.router, prefix="/api/v1")
 app.include_router(clips.router, prefix="/api/v1")
 app.include_router(broll.router, prefix="/api/v1")
 app.include_router(exports.router, prefix="/api/v1")
+app.include_router(exports.videos_router, prefix="/api/v1")
+app.include_router(events.router, prefix="/api/v1")
 app.include_router(dashboard.router, prefix="/api/v1")
 app.include_router(admin.router, prefix="/api/v1")
 app.include_router(generate.router, prefix="/api/v1")

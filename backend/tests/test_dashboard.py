@@ -96,3 +96,44 @@ class TestDashboardStats:
     def test_stats_requires_auth(self, client: TestClient) -> None:
         response = client.get("/api/v1/dashboard/stats")
         assert response.status_code == 401
+
+    def test_stats_avg_virality_score(
+        self, client: TestClient, auth_headers: dict[str, str], db_session: Session, test_user: User
+    ) -> None:
+        project = VideoProject(
+            user_id=test_user.id,
+            title="Project",
+            source_type=SourceType.upload,
+            status=VideoProjectStatus.ready,
+        )
+        db_session.add(project)
+        db_session.commit()
+
+        c1 = Clip(
+            video_project_id=project.id,
+            user_id=test_user.id,
+            title="C1",
+            start_time=0.0,
+            end_time=5.0,
+            order_index=0,
+            status=ClipStatus.ready,
+            virality_score=80.0,
+        )
+        c2 = Clip(
+            video_project_id=project.id,
+            user_id=test_user.id,
+            title="C2",
+            start_time=5.0,
+            end_time=10.0,
+            order_index=1,
+            status=ClipStatus.ready,
+            virality_score=90.0,
+        )
+        db_session.add_all([c1, c2])
+        db_session.commit()
+
+        response = client.get("/api/v1/dashboard/stats", headers=auth_headers)
+        assert response.status_code == 200
+        body = response.json()
+        assert body["avg_virality_score"] == 85.0
+

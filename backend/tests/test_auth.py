@@ -181,3 +181,57 @@ class TestRateLimit:
         assert register_resp.status_code == 201
         login_resp = _login(client, "normal@example.com", "Password123!")
         assert login_resp.status_code == 200
+
+
+class TestPasswordReset:
+    def test_forgot_password_returns_200_for_any_email(self, client: TestClient) -> None:
+        # Non-existent email returns 200
+        resp1 = client.post("/api/v1/auth/forgot-password", json={"email": "nobody@example.com"})
+        assert resp1.status_code == 200
+        assert "reset link" in resp1.json()["message"]
+
+        # Existing user also returns 200
+        _register(client, email="resetuser@example.com")
+        resp2 = client.post("/api/v1/auth/forgot-password", json={"email": "resetuser@example.com"})
+        assert resp2.status_code == 200
+
+    def test_reset_password_updates_credentials_and_allows_login(
+        self, client: TestClient
+    ) -> None:
+        from app.services import auth_service
+
+        _register(client, email="flowuser@example.com", password="OldPassword123!")
+        client.post("/api/v1/auth/forgot-password", json={"email": "flowuser@example.com"})
+
+        # Find the generated token from in-memory token store
+        tokens = [
+            tok for tok, (uid, _) in auth_service._reset_tokens.items()
+        ]
+        assert len(tokens) > 0
+        valid_token = tokens[-1]
+
+        # Reset password
+        reset_resp = client.post(
+            "/api/v1/auth/reset-password",
+            json={"token": valid_token, "new_password": "NewPassword456!"},
+        )
+        assert reset_resp.status_code == 200
+
+        # Login with new password succeeds
+        login_resp = _login(client, "flowuser@example.com", "NewPassword456!")
+        assert login_resp.status_code == 200
+
+        # Re-using the token returns 401
+        reuse_resp = client.post(
+            "/api/v1/auth/reset-password",
+            json={"token": valid_token, "new_password": "AnotherPassword789!"},
+        )
+        assert reuse_resp.status_code == 401
+
+    def test_reset_password_invalid_token_401(self, client: TestClient) -> None:
+        resp = client.post(
+            "/api/v1/auth/reset-password",
+            json={"token": "totally-invalid-token", "new_password": "NewPassword123!"},
+        )
+        assert resp.status_code == 401
+

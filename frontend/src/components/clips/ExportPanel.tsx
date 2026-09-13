@@ -1,22 +1,32 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { AlertCircle, Download, Loader2 } from 'lucide-react';
+import { AlertCircle, AlertTriangle, CheckCircle2, Download, Loader2, Zap } from 'lucide-react';
 import { GlassCard } from '@/components/ui/GlassCard';
 import { GradientButton } from '@/components/ui/GradientButton';
 import {
   downloadClip,
+  getClipEventsUrl,
   getExportStatus,
+  isScoreGate,
   triggerExport,
   type ExportStatusResponse,
+  type ScoreGateDetail,
 } from '@/services/exportService';
-
-const POLL_INTERVAL_MS = 3000;
 
 type ExportState = 'idle' | 'rendering' | 'ready' | 'failed';
 
+/** SSE event payload from the backend /clips/{id}/events stream. */
+interface ClipEvent {
+  type: 'status_update' | 'error' | 'timeout';
+  status?: ExportState;
+  pct?: number;
+  virality_score?: number | null;
+  message?: string;
+}
+
 /**
  * Self-contained export widget for a single clip. Fetches its own status on
- * mount, drives export + polling, and offers download/retry. Designed to be
- * dropped into any parent layout as `<ExportPanel clipId={clip.id} />`.
+ * mount, drives export + SSE progress, shows the soft score-gate confirmation
+ * dialog, and offers download/retry.
  */
 export function ExportPanel({ clipId }: { clipId: number }) {
   const [status, setStatus] = useState<ExportState>('idle');
@@ -24,53 +34,83 @@ export function ExportPanel({ clipId }: { clipId: number }) {
   const [isStarting, setIsStarting] = useState(false);
   const [isDownloading, setIsDownloading] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const [progressPct, setProgressPct] = useState(0);
 
-  const pollIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  // Score gate state
+  const [gateDetail, setGateDetail] = useState<ScoreGateDetail | null>(null);
+  const [showGateDialog, setShowGateDialog] = useState(false);
+  const [isConfirmingForce, setIsConfirmingForce] = useState(false);
 
-  const clearPolling = useCallback(() => {
-    if (pollIntervalRef.current !== null) {
-      clearInterval(pollIntervalRef.current);
-      pollIntervalRef.current = null;
+  const eventSourceRef = useRef<EventSource | null>(null);
+
+  // ----- SSE helpers -----
+
+  const closeEventSource = useCallback(() => {
+    if (eventSourceRef.current) {
+      eventSourceRef.current.close();
+      eventSourceRef.current = null;
     }
   }, []);
 
-  const applyStatus = useCallback(
-    (data: ExportStatusResponse) => {
-      setStatus(data.status);
-      if (data.status === 'ready' || data.status === 'failed') {
-        clearPolling();
+  const openEventSource = useCallback(
+    (id: number) => {
+      closeEventSource();
+      if (typeof EventSource === 'undefined') {
+        return;
+      }
+      try {
+        const url = getClipEventsUrl(id);
+        const es = new EventSource(url);
+
+      es.onmessage = (e: MessageEvent<string>) => {
+        try {
+          const event = JSON.parse(e.data) as ClipEvent;
+          if (event.type === 'status_update' && event.status) {
+            setStatus(event.status);
+            if (event.pct !== undefined) setProgressPct(event.pct);
+            if (event.status === 'ready' || event.status === 'failed') {
+              closeEventSource();
+            }
+          } else if (event.type === 'error' || event.type === 'timeout') {
+            // Fall back to polling on SSE errors
+            closeEventSource();
+          }
+        } catch {
+          // Malformed event — ignore
+        }
+      };
+
+      es.onerror = () => {
+        // EventSource auto-reconnects on transient errors; don't close.
+        // If the stream is genuinely gone (clip rendered, server closed it),
+        // the `status_update` with ready/failed has already been received.
+      };
+
+      eventSourceRef.current = es;
+      } catch {
+        closeEventSource();
       }
     },
-    [clearPolling],
+    [closeEventSource],
   );
 
-  const startPolling = useCallback(() => {
-    clearPolling();
-    pollIntervalRef.current = setInterval(() => {
-      getExportStatus(clipId)
-        .then(applyStatus)
-        .catch(() => {
-          clearPolling();
-          setStatus('failed');
-          setErrorMessage('Lost connection while checking export status.');
-        });
-    }, POLL_INTERVAL_MS);
-  }, [applyStatus, clearPolling, clipId]);
+  // ----- Mount: fetch initial status -----
 
   useEffect(() => {
     let isMounted = true;
 
     getExportStatus(clipId)
-      .then((data) => {
+      .then((data: ExportStatusResponse) => {
         if (!isMounted) return;
-        applyStatus(data);
+        setStatus(data.status);
         if (data.status === 'rendering') {
-          startPolling();
+          setProgressPct(40);
+          openEventSource(clipId);
+        } else if (data.status === 'ready') {
+          setProgressPct(100);
         }
       })
       .catch(() => {
-        // No export has been triggered yet (or the check failed) — default
-        // to idle so the user can start one.
         if (isMounted) setStatus('idle');
       })
       .finally(() => {
@@ -79,26 +119,43 @@ export function ExportPanel({ clipId }: { clipId: number }) {
 
     return () => {
       isMounted = false;
-      clearPolling();
+      closeEventSource();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [clipId]);
 
-  const handleExport = async () => {
+  // ----- Export handlers -----
+
+  const handleExport = async (force = false) => {
     setErrorMessage(null);
     setIsStarting(true);
     try {
-      const data = await triggerExport(clipId);
-      applyStatus(data);
-      if (data.status === 'rendering' || data.status === 'idle') {
-        setStatus('rendering');
-        startPolling();
+      const data = force ? await triggerExport(clipId, true) : await triggerExport(clipId);
+      setStatus(data.status);
+      if (data.status === 'rendering') {
+        setProgressPct(10);
+        openEventSource(clipId);
       }
-    } catch {
-      setStatus('failed');
-      setErrorMessage('Failed to start export. Please try again.');
+    } catch (err: unknown) {
+      if (isScoreGate(err)) {
+        setGateDetail(err.detail);
+        setShowGateDialog(true);
+      } else {
+        setStatus('failed');
+        setErrorMessage('Failed to start export. Please try again.');
+      }
     } finally {
       setIsStarting(false);
+    }
+  };
+
+  const handleConfirmForce = async () => {
+    setShowGateDialog(false);
+    setIsConfirmingForce(true);
+    try {
+      await handleExport(true);
+    } finally {
+      setIsConfirmingForce(false);
     }
   };
 
@@ -115,11 +172,13 @@ export function ExportPanel({ clipId }: { clipId: number }) {
     }
   };
 
+  // ----- Render -----
+
   return (
     <GlassCard className="space-y-5">
       <div className="flex items-center justify-between border-b border-glass-border pb-3">
         <div>
-          <h3 className="text-base font-bold text-foreground">9:16 Video Export & Download</h3>
+          <h3 className="text-base font-bold text-foreground">9:16 Video Export &amp; Download</h3>
           <p className="text-xs text-muted-foreground mt-0.5">
             Render vertical Short with burned-in animated subtitles and B-roll.
           </p>
@@ -145,6 +204,49 @@ export function ExportPanel({ clipId }: { clipId: number }) {
         </div>
       </div>
 
+      {/* Score Gate Confirmation Dialog */}
+      {showGateDialog && gateDetail && (
+        <div className="rounded-xl border border-amber-500/40 bg-amber-500/10 p-4 space-y-3">
+          <div className="flex items-start gap-2.5">
+            <AlertTriangle className="h-5 w-5 text-amber-400 mt-0.5 shrink-0" />
+            <div className="space-y-1">
+              <p className="text-sm font-semibold text-amber-300">Low Virality Score</p>
+              <p className="text-xs text-muted-foreground leading-relaxed">
+                This clip scored{' '}
+                <span className="font-bold text-amber-400">
+                  {Math.round(gateDetail.virality_score)}/100
+                </span>{' '}
+                — below the {gateDetail.threshold}-point review threshold. The hook or sentence
+                completeness may need work for maximum impact.
+              </p>
+            </div>
+          </div>
+          <div className="flex gap-2 pt-1">
+            <button
+              id={`export-cancel-gate-${clipId}`}
+              type="button"
+              onClick={() => setShowGateDialog(false)}
+              className="flex-1 rounded-lg border border-glass-border bg-background/60 px-3 py-2 text-xs font-medium text-foreground hover:bg-background/80 transition-colors"
+            >
+              Review clip first
+            </button>
+            <GradientButton
+              id={`export-force-${clipId}`}
+              onClick={handleConfirmForce}
+              disabled={isConfirmingForce}
+              className="flex-1 py-2 text-xs font-semibold"
+            >
+              {isConfirmingForce ? (
+                <Loader2 className="h-3.5 w-3.5 animate-spin mr-1" />
+              ) : (
+                <Zap className="h-3.5 w-3.5 mr-1" />
+              )}
+              Export anyway
+            </GradientButton>
+          </div>
+        </div>
+      )}
+
       {isCheckingStatus ? (
         <div className="flex items-center justify-center gap-2 py-6 text-sm text-muted-foreground">
           <Loader2 className="h-4 w-4 animate-spin text-primary" />
@@ -152,10 +254,11 @@ export function ExportPanel({ clipId }: { clipId: number }) {
         </div>
       ) : (
         <div className="space-y-4">
-          {status === 'idle' && (
+          {status === 'idle' && !showGateDialog && (
             <div className="space-y-3">
               <GradientButton
-                onClick={handleExport}
+                id={`export-trigger-${clipId}`}
+                onClick={() => handleExport(false)}
                 disabled={isStarting}
                 className="w-full py-3 text-sm font-semibold shadow-lg"
               >
@@ -181,21 +284,29 @@ export function ExportPanel({ clipId }: { clipId: number }) {
               <p className="text-xs text-muted-foreground">
                 FFmpeg is compositing video, burning subtitles, and overlaying B-roll footage.
               </p>
-              <div className="h-2 w-full overflow-hidden rounded-full bg-muted">
-                <div className="h-full w-2/3 animate-pulse rounded-full bg-primary" />
+              {/* Animated progress bar driven by SSE events */}
+              <div className="relative h-2 w-full overflow-hidden rounded-full bg-muted">
+                <div
+                  className="h-full rounded-full bg-gradient-to-r from-primary to-violet-500 transition-all duration-700 ease-out"
+                  style={{ width: `${Math.max(progressPct, 8)}%` }}
+                />
               </div>
+              <p className="text-[10px] text-muted-foreground font-mono">{progressPct}%</p>
             </div>
           )}
 
           {status === 'ready' && (
             <div className="space-y-3">
-              <div className="rounded-xl border border-emerald-500/30 bg-emerald-500/10 p-3.5 text-center text-xs text-emerald-400 font-medium">
-                ✨ Your 9:16 vertical Short is rendered and ready for download!
+              <div className="flex items-center gap-2 rounded-xl border border-emerald-500/30 bg-emerald-500/10 p-3.5 text-xs text-emerald-400 font-medium">
+                <CheckCircle2 className="h-4 w-4 shrink-0" />
+                <span>Your 9:16 vertical Short is rendered and ready for download!</span>
               </div>
               <GradientButton
+                id={`export-download-${clipId}`}
                 onClick={handleDownload}
                 disabled={isDownloading}
-                className="w-full py-3 text-sm font-bold bg-gradient-to-r from-emerald-500 to-teal-500 text-white shadow-lg hover:opacity-95"
+                className="w-full py-3 text-sm font-bold shadow-lg"
+                style={{ background: 'linear-gradient(to right, #10b981, #14b8a6)' }}
               >
                 {isDownloading ? (
                   <Loader2 className="h-4 w-4 animate-spin mr-1.5" />
@@ -206,7 +317,8 @@ export function ExportPanel({ clipId }: { clipId: number }) {
               </GradientButton>
               <button
                 type="button"
-                onClick={handleExport}
+                id={`export-re-render-${clipId}`}
+                onClick={() => handleExport(false)}
                 disabled={isStarting}
                 className="w-full text-center text-xs text-muted-foreground hover:text-foreground transition-colors underline pt-1"
               >
@@ -219,11 +331,12 @@ export function ExportPanel({ clipId }: { clipId: number }) {
             <div className="space-y-3">
               <div className="flex items-center gap-2 rounded-xl bg-destructive/15 p-3 text-xs text-destructive">
                 <AlertCircle className="h-4 w-4 shrink-0" />
-                <span>{errorMessage ?? 'Export failed.'}</span>
+                <span>{errorMessage ?? 'Export failed. Please try again.'}</span>
               </div>
               <GradientButton
                 variant="outline"
-                onClick={handleExport}
+                id={`export-retry-${clipId}`}
+                onClick={() => handleExport(false)}
                 disabled={isStarting}
                 className="w-full"
               >

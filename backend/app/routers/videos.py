@@ -32,6 +32,7 @@ from app.models.transcript_segment import TranscriptSegment
 from app.models.user import User
 from app.models.video_project import (
     ClipLength,
+    CopyrightDeclaration,
     SourceType,
     VideoProject,
     VideoProjectStatus,
@@ -176,6 +177,7 @@ async def create_video_project(
     framing_mode: ClipFraming = Form(default=ClipFraming.speaker_focus),
     caption_style: ClipCaptionStyle = Form(default=ClipCaptionStyle.hormozi),
     auto_broll: bool = Form(default=True),
+    copyright_declaration: CopyrightDeclaration | None = Form(default=None),
     file: UploadFile | None = File(default=None),
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
@@ -211,6 +213,7 @@ async def create_video_project(
         framing_mode=framing_mode,
         caption_style=caption_style,
         auto_broll=auto_broll,
+        copyright_declaration=copyright_declaration,
     )
 
     if file is not None:

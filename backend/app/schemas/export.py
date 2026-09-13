@@ -15,13 +15,21 @@ class ExportStatusResponse(BaseModel):
     Returned by both POST /clips/{id}/export (immediately, status=rendering)
     and GET /clips/{id}/export/status (polled by the frontend until the
     status settles to `ready` or `failed`).
+
+    `virality_score` is the clip's score at the time of the request (0-100
+    or None for unscored legacy clips). `below_threshold` is True when the
+    score is below the 50-point review threshold — used by the frontend to
+    offer a soft-warning confirmation dialog rather than a hard block.
     """
 
     clip_id: int
     status: ClipStatus
     video_file_path: str | None = None
+    virality_score: float | None = None
+    below_threshold: bool = False
 
     model_config = ConfigDict(from_attributes=True)
+
 
 
 class SpeakerFocusWindow(BaseModel):

@@ -7,7 +7,12 @@ from datetime import datetime
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from app.models.clip import ClipCaptionStyle, ClipFraming
-from app.models.video_project import ClipLength, SourceType, VideoProjectStatus
+from app.models.video_project import (
+    ClipLength,
+    CopyrightDeclaration,
+    SourceType,
+    VideoProjectStatus,
+)
 
 
 class VideoProjectCreate(BaseModel):
@@ -31,6 +36,8 @@ class VideoProjectCreate(BaseModel):
     framing_mode: ClipFraming = ClipFraming.speaker_focus
     caption_style: ClipCaptionStyle = ClipCaptionStyle.hormozi
     auto_broll: bool = True
+    # Self-declared copyright basis -- informational only, never a gate to submission.
+    copyright_declaration: CopyrightDeclaration | None = None
 
     @model_validator(mode="after")
     def _validate_source_url_required_for_url_type(self) -> VideoProjectCreate:
@@ -69,6 +76,7 @@ class VideoProjectResponse(BaseModel):
     framing_mode: ClipFraming
     caption_style: ClipCaptionStyle
     auto_broll: bool
+    copyright_declaration: CopyrightDeclaration | None = None
     created_at: datetime
     updated_at: datetime
 

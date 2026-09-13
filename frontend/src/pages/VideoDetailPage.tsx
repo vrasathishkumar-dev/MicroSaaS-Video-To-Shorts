@@ -1,7 +1,9 @@
 import { useEffect, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
 import {
+  Download,
   Film,
+  Loader2,
   Sparkles,
   Scissors,
   Flame,
@@ -16,6 +18,7 @@ import { StatusBadge } from '@/components/videos/StatusBadge';
 import { cn } from '@/lib/utils';
 import { generateClips, listClips, deleteClip } from '@/services/clipService';
 import { getTranscript, getVideo, reprocessVideo } from '@/services/videoService';
+import { exportAllClips } from '@/services/exportService';
 import { getExpectedShortsCount } from '@/lib/virality';
 import type { Clip, TranscriptSegment, VideoProject, VideoProjectStatus } from '@/types';
 
@@ -45,6 +48,8 @@ export function VideoDetailPage() {
   const [clips, setClips] = useState<Clip[]>([]);
   const [isGenerating, setIsGenerating] = useState(false);
   const [generateError, setGenerateError] = useState<string | null>(null);
+  const [isExportingAll, setIsExportingAll] = useState(false);
+  const [exportAllMessage, setExportAllMessage] = useState<string | null>(null);
 
   const [pollTrigger, setPollTrigger] = useState(0);
 
@@ -149,6 +154,24 @@ export function VideoDetailPage() {
     }
   };
 
+  const handleExportAll = async () => {
+    if (!video) return;
+    setIsExportingAll(true);
+    setExportAllMessage(null);
+    try {
+      const result = await exportAllClips(video.id);
+      setExportAllMessage(
+        `Queued ${result.queued} clip${result.queued !== 1 ? 's' : ''} for rendering.` +
+          (result.already_rendering > 0 ? ` ${result.already_rendering} already rendering.` : '') +
+          (result.already_ready > 0 ? ` ${result.already_ready} already ready.` : ''),
+      );
+    } catch {
+      setExportAllMessage('Failed to queue clips for export.');
+    } finally {
+      setIsExportingAll(false);
+    }
+  };
+
   if (isLoading) {
     return (
       <PageWrapper className="mx-auto max-w-5xl px-4 py-10">
@@ -227,9 +250,35 @@ export function VideoDetailPage() {
         )}
 
         {isProcessing && (
-          <div className="mt-4 rounded-xl border border-primary/20 bg-primary/5 p-3 text-xs text-primary flex items-center gap-2">
-            <Sparkles className="h-4 w-4 animate-spin shrink-0" />
-            <span>AI transcription & highlight detection is actively processing...</span>
+          <div className="mt-4 rounded-xl border border-primary/20 bg-primary/5 p-3 text-xs text-primary space-y-2">
+            <div className="flex items-center gap-2">
+              <Sparkles className="h-4 w-4 animate-spin shrink-0" />
+              <span>AI transcription &amp; highlight detection is actively processing...</span>
+            </div>
+            {/* Pipeline stage progress indicators */}
+            <div className="flex items-center gap-1.5 flex-wrap">
+              {(['pending', 'downloading', 'transcribing', 'analyzing'] as const).map((stage) => {
+                const stages = ['pending', 'downloading', 'transcribing', 'analyzing', 'ready', 'failed'];
+                const currentIdx = stages.indexOf(video.status);
+                const stageIdx = stages.indexOf(stage);
+                const isDone = currentIdx > stageIdx;
+                const isCurrent = currentIdx === stageIdx;
+                return (
+                  <span
+                    key={stage}
+                    className={`px-2 py-0.5 rounded-full text-[10px] font-semibold capitalize ${
+                      isDone
+                        ? 'bg-emerald-500/20 text-emerald-400'
+                        : isCurrent
+                          ? 'bg-primary/30 text-primary animate-pulse'
+                          : 'bg-muted text-muted-foreground'
+                    }`}
+                  >
+                    {stage}
+                  </span>
+                );
+              })}
+            </div>
           </div>
         )}
 
@@ -276,7 +325,33 @@ export function VideoDetailPage() {
               </GradientButton>
             </Link>
           )}
+
+          {clips.length > 0 && video.status === 'ready' && (
+            <GradientButton
+              id="export-all-clips"
+              variant="outline"
+              onClick={handleExportAll}
+              disabled={isExportingAll}
+              className="gap-1.5"
+            >
+              {isExportingAll ? (
+                <>
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                  Queuing...
+                </>
+              ) : (
+                <>
+                  <Download className="h-4 w-4" />
+                  Export All Clips
+                </>
+              )}
+            </GradientButton>
+          )}
         </div>
+
+        {exportAllMessage && (
+          <p className="mt-3 text-xs text-primary bg-primary/10 px-3 py-2 rounded-lg">{exportAllMessage}</p>
+        )}
       </GlassCard>
 
       {/* Generated Clips Grid Section */}

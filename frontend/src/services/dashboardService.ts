@@ -13,6 +13,7 @@ export interface DashboardStats {
   clips_ready: number;
   avg_processing_time_seconds: number | null;
   storage_used_bytes: number | null;
+  avg_virality_score?: number | null;
 }
 
 /** Fetch aggregate stats (video/clip counts, status breakdown, storage) for the current user. */

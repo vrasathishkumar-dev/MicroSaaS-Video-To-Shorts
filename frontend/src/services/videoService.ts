@@ -3,6 +3,7 @@ import api from '@/services/api';
 import type {
   CaptionStylePreset,
   ClipLength,
+  CopyrightDeclaration,
   FramingMode,
   PaginatedResponse,
   TranscriptSegment,
@@ -21,6 +22,8 @@ export interface SubmitVideoPayload {
   framingMode: FramingMode;
   captionStyle: CaptionStylePreset;
   autoBroll: boolean;
+  /** Self-declared copyright basis -- informational, never a gate to submission. */
+  copyrightDeclaration?: CopyrightDeclaration | null;
 }
 
 /** Fetch a page of the current user's video projects. */
@@ -65,6 +68,9 @@ export async function submitVideo(
   formData.append('framing_mode', payload.framingMode);
   formData.append('caption_style', payload.captionStyle);
   formData.append('auto_broll', String(payload.autoBroll));
+  if (payload.copyrightDeclaration) {
+    formData.append('copyright_declaration', payload.copyrightDeclaration);
+  }
 
   const { data } = await api.post<VideoProject>('/videos', formData, {
     onUploadProgress,

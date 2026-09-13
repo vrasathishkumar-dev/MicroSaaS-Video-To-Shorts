@@ -80,3 +80,22 @@ export async function updateProfile(payload: UpdateProfilePayload): Promise<User
   const { data } = await api.put<User>('/auth/me', payload);
   return data;
 }
+
+/** Requests a password reset link (logged to server console for personal use). */
+export async function forgotPassword(email: string): Promise<{ message: string }> {
+  const { data } = await api.post<{ message: string }>('/auth/forgot-password', { email });
+  return data;
+}
+
+/** Completes a password reset using the token from the console log. */
+export async function resetPassword(
+  token: string,
+  newPassword: string,
+): Promise<{ message: string }> {
+  const { data } = await api.post<{ message: string }>('/auth/reset-password', {
+    token,
+    new_password: newPassword,
+  });
+  return data;
+}
+

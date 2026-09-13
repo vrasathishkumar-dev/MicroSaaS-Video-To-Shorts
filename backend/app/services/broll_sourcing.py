@@ -642,18 +642,197 @@ def _choose_asset(
 
 
 async def _search_all_providers(keyword: str, per_page: int = 5) -> list[dict]:
-    """Search Pexels and Pixabay concurrently for `keyword`, combining results.
+    """Search Pexels, Pixabay, Wikimedia Commons, and Internet Archive concurrently.
 
-    Merges both providers into one ranked list rather than concatenating
-    them, so the top pick is the footage that best survives the 9:16 crop
-    regardless of which library it came from. Either provider failing or
-    returning empty degrades gracefully rather than aborting the search.
+    Merges all four providers into one ranked list so the top pick is the
+    footage that best survives the 9:16 crop regardless of which library it
+    came from. Any provider failing or returning empty degrades gracefully
+    rather than aborting the search.
     """
 
-    pexels_results, pixabay_results = await asyncio.gather(
-        search_pexels(keyword, per_page=per_page),
-        search_pixabay(keyword, per_page=per_page),
+    pexels_results, pixabay_results, wikimedia_results, archive_results = (
+        await asyncio.gather(
+            search_pexels(keyword, per_page=per_page),
+            search_pixabay(keyword, per_page=per_page),
+            search_wikimedia(keyword, per_page=per_page),
+            search_internet_archive(keyword, per_page=per_page),
+        )
     )
-    combined = [*pexels_results, *pixabay_results]
+    combined = [*pexels_results, *pixabay_results, *wikimedia_results, *archive_results]
     combined.sort(key=_rank_score, reverse=True)
     return combined
+
+
+# ---------------------------------------------------------------------------
+# Public-domain / CC-licensed B-roll sources
+# ---------------------------------------------------------------------------
+
+WIKIMEDIA_API_URL = "https://commons.wikimedia.org/w/api.php"
+INTERNET_ARCHIVE_SEARCH_URL = "https://archive.org/advancedsearch.php"
+
+
+async def search_wikimedia(query: str, per_page: int = 10) -> list[dict]:
+    """Search Wikimedia Commons for CC-licensed and public-domain videos.
+
+    Uses the MediaWiki API's list=search action, scoped to the File: namespace
+    (ns=6) and filtered to video files. No API key required — the API is free
+    and rate-limit-generous for non-commercial use. Returns normalized result
+    dicts in the same shape as search_pexels / search_pixabay.
+
+    Degrades gracefully: on any request/parse failure this logs a warning
+    and returns an empty list instead of raising.
+    """
+
+    params: dict[str, str | int] = {
+        "action": "query",
+        "list": "search",
+        "srnamespace": "6",       # File namespace
+        "srsearch": f"{query} filetype:video",
+        "srlimit": min(per_page * 2, 50),  # ask for more to allow filtering
+        "srprop": "size|wordcount|timestamp|snippet",
+        "format": "json",
+        "origin": "*",
+    }
+
+    try:
+        async with httpx.AsyncClient(timeout=_HTTP_TIMEOUT) as client:
+            response = await client.get(WIKIMEDIA_API_URL, params=params)
+            response.raise_for_status()
+            data = response.json()
+    except httpx.HTTPError as exc:
+        logger.warning("Wikimedia search failed for query=%r: %s", query, exc)
+        return []
+    except ValueError as exc:
+        logger.warning("Wikimedia search returned invalid JSON for query=%r: %s", query, exc)
+        return []
+
+    results: list[dict] = []
+    for item in (data.get("query") or {}).get("search") or []:
+        title: str = item.get("title") or ""
+        # Strip "File:" prefix; Commons filenames are the asset identifier.
+        filename = title.removeprefix("File:")
+        if not filename:
+            continue
+
+        # Build a direct file URL via the Commons Special:FilePath redirect,
+        # which resolves to the actual CDN URL without a separate API call.
+        encoded_name = filename.replace(" ", "_")
+        asset_url = (
+            f"https://commons.wikimedia.org/wiki/Special:FilePath/{encoded_name}"
+        )
+        provider_url = (
+            f"https://commons.wikimedia.org/wiki/File:{encoded_name}"
+        )
+
+        results.append(
+            {
+                "source": "wikimedia",
+                "source_asset_id": encoded_name,
+                "asset_url": asset_url,
+                "preview_url": asset_url,          # same URL; browser negotiates
+                "thumbnail_url": None,             # separate thumb API call; skip for MVP
+                "provider_url": provider_url,
+                "author": None,                    # author lives on the file description page
+                "description": (
+                    (item.get("snippet") or "")
+                    .replace("<span class=\"searchmatch\">", "")
+                    .replace("</span>", "")
+                ),
+                "width": None,                     # dimensions unavailable without a second call
+                "height": None,
+                "duration": None,
+                "keyword": query,
+            }
+        )
+        if len(results) >= per_page:
+            break
+
+    results.sort(key=_rank_score, reverse=True)
+    return results
+
+
+async def search_internet_archive(query: str, per_page: int = 10) -> list[dict]:
+    """Search the Internet Archive for CC-licensed and public-domain videos.
+
+    Uses the archive.org advanced search API, scoped to the movies mediatype
+    and filtered to items with a Creative Commons licence URL, which covers
+    CC0, CC BY, CC BY-SA, and other open licences as well as US Government
+    works and Prelinger Archives content explicitly marked as public domain.
+
+    No API key required. Degrades gracefully on any failure.
+    """
+
+    params: dict[str, str | int] = {
+        "q": f"{query} mediatype:movies licenseurl:*creativecommons*",
+        "fl[]": "identifier,title,description,creator,subject,avg_rating",
+        "rows": min(per_page * 2, 50),
+        "output": "json",
+        "sort[]": "downloads desc",
+    }
+
+    try:
+        async with httpx.AsyncClient(timeout=_HTTP_TIMEOUT) as client:
+            response = await client.get(INTERNET_ARCHIVE_SEARCH_URL, params=params)
+            response.raise_for_status()
+            data = response.json()
+    except httpx.HTTPError as exc:
+        logger.warning("Internet Archive search failed for query=%r: %s", query, exc)
+        return []
+    except ValueError as exc:
+        logger.warning("Internet Archive search returned invalid JSON for query=%r: %s", query, exc)
+        return []
+
+    results: list[dict] = []
+    for doc in (data.get("response") or {}).get("docs") or []:
+        identifier: str = doc.get("identifier") or ""
+        if not identifier:
+            continue
+
+        # archive.org item page URL.
+        provider_url = f"https://archive.org/details/{identifier}"
+
+        # The download URL pattern for the item's primary MP4 (if present).
+        # archive.org encodes the filename as {identifier}.mp4 for most video
+        # items, though the exact filename varies. We use the /download/ redirect
+        # which resolves to whatever the item's primary video file is.
+        asset_url = f"https://archive.org/download/{identifier}/{identifier}.mp4"
+
+        description: str = ""
+        raw_desc = doc.get("description")
+        if isinstance(raw_desc, list):
+            description = " ".join(str(d) for d in raw_desc)
+        elif isinstance(raw_desc, str):
+            description = raw_desc
+
+        # Subject tags work the same as Pixabay's tag list for relevance scoring.
+        subject = doc.get("subject") or []
+        if isinstance(subject, list):
+            description = description or " ".join(subject)
+        elif isinstance(subject, str):
+            description = description or subject
+
+        creator = doc.get("creator")
+        if isinstance(creator, list):
+            creator = ", ".join(creator)
+
+        results.append(
+            {
+                "source": "internet_archive",
+                "source_asset_id": identifier,
+                "asset_url": asset_url,
+                "preview_url": asset_url,
+                "thumbnail_url": f"https://archive.org/services/img/{identifier}",
+                "provider_url": provider_url,
+                "author": creator or None,
+                "description": description[:500],  # cap length for _relevance()
+                "width": None,
+                "height": None,
+                "duration": None,
+                "keyword": query,
+            }
+        )
+        if len(results) >= per_page:
+            break
+
+    results.sort(key=_rank_score, reverse=True)
+    return results

@@ -54,11 +54,25 @@ export function VideoProjectCard({
         )}
       </div>
 
-      <div className="flex items-center gap-3">
+      <div className="flex items-center gap-3 flex-wrap">
         <StatusBadge status={video.status} />
         <span className="text-sm text-muted-foreground">
           {formatDuration(video.duration_seconds)}
         </span>
+        {video.copyright_declaration && (
+          <span
+            className={
+              video.copyright_declaration === 'fair_use'
+                ? 'inline-flex items-center rounded-md bg-amber-500/10 px-2 py-0.5 text-[10px] font-medium text-amber-500 ring-1 ring-amber-500/20'
+                : 'inline-flex items-center rounded-md bg-muted/60 px-2 py-0.5 text-[10px] font-medium text-muted-foreground ring-1 ring-glass-border'
+            }
+          >
+            {video.copyright_declaration === 'own_content' && 'Own content'}
+            {video.copyright_declaration === 'licensed' && 'Licensed'}
+            {video.copyright_declaration === 'public_domain' && 'Public domain'}
+            {video.copyright_declaration === 'fair_use' && 'Fair use ⚠'}
+          </span>
+        )}
       </div>
 
       {['pending', 'downloading', 'transcribing', 'analyzing'].includes(video.status) && (

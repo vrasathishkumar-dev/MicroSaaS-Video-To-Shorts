@@ -53,6 +53,7 @@ describe('StatsWidget', () => {
     videos_by_status: {},
     total_clips: 34,
     clips_ready: 20,
+    avg_virality_score: 85,
     avg_processing_time_seconds: 95,
     storage_used_bytes: 2048,
   };
@@ -66,6 +67,8 @@ describe('StatsWidget', () => {
     expect(screen.getByText('34')).toBeInTheDocument();
     expect(screen.getByText('Clips ready')).toBeInTheDocument();
     expect(screen.getByText('20')).toBeInTheDocument();
+    expect(screen.getByText('Avg virality score')).toBeInTheDocument();
+    expect(screen.getByText('85/100')).toBeInTheDocument();
     expect(screen.getByText('Avg. processing time')).toBeInTheDocument();
     expect(screen.getByText('1m 35s')).toBeInTheDocument();
     expect(screen.getByText('Storage used')).toBeInTheDocument();
@@ -77,6 +80,7 @@ describe('StatsWidget', () => {
       <StatsWidget
         stats={{
           ...stats,
+          avg_virality_score: null,
           avg_processing_time_seconds: null,
           storage_used_bytes: null,
         }}
@@ -84,6 +88,6 @@ describe('StatsWidget', () => {
     );
 
     const placeholders = screen.getAllByText('—');
-    expect(placeholders).toHaveLength(2);
+    expect(placeholders).toHaveLength(3);
   });
 });

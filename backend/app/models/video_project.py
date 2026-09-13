@@ -25,6 +25,20 @@ class SourceType(str, enum.Enum):
     text = "text"  # AI-generated from a title + description prompt
 
 
+class CopyrightDeclaration(str, enum.Enum):
+    """The submitter's self-declared copyright basis for the source material.
+
+    Informational only — not a gate to submission. Stored so the owner has
+    an audit trail of what they believed the licence situation to be when
+    each project was created. The app does not verify any of these claims.
+    """
+
+    own_content   = "own_content"    # uploader owns all rights to the footage
+    licensed      = "licensed"       # explicit licence obtained from rights holder
+    public_domain = "public_domain"  # CC0, US Government work, pre-1928, or archive source
+    fair_use      = "fair_use"       # good-faith fair-use claim (commentary / criticism)
+
+
 class VideoProjectStatus(str, enum.Enum):
     """Processing pipeline status of a video project."""
 
@@ -71,6 +85,14 @@ class VideoProject(Base, TimestampMixin):
     )
     duration_seconds: Mapped[float | None] = mapped_column(Float, nullable=True)
     error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+    # Self-declared copyright basis for the source material. Nullable: pre-existing
+    # rows have no declared basis and stay NULL rather than getting a default that
+    # would misrepresent what the submitter actually said at the time.
+    copyright_declaration: Mapped[CopyrightDeclaration | None] = mapped_column(
+        Enum(CopyrightDeclaration, name="copyright_declaration"),
+        nullable=True,
+    )
 
     # Text-to-shorts generation metadata (populated when source_type=text)
     description: Mapped[str | None] = mapped_column(Text, nullable=True)

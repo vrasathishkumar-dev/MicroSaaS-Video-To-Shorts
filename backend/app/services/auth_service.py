@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import logging as _logging
+import secrets
 from datetime import UTC, datetime, timedelta
 
 from sqlalchemy.orm import Session
@@ -129,3 +131,78 @@ def update_user_profile(db: Session, user: User, payload: UserUpdateRequest) -> 
     db.commit()
     db.refresh(user)
     return user
+
+
+# ---------------------------------------------------------------------------
+# Password reset (personal-use implementation)
+#
+# No email infrastructure is required: the reset token is printed to the
+# server console (uvicorn stdout). For a single-user personal site this is
+# perfectly workable -- you check the terminal, copy the URL, paste it.
+# ---------------------------------------------------------------------------
+
+_reset_logger = _logging.getLogger(__name__)
+
+# In-memory token store: {token: (user_id, expiry_timestamp)}.
+# Sufficient for personal use (one user, restarts clear old tokens which is
+# fine since you'd just request a new one). Replace with a DB table for
+# multi-user production use.
+_reset_tokens: dict[str, tuple[int, float]] = {}
+_RESET_TOKEN_TTL_SECONDS = 3600  # 1 hour
+
+
+def generate_password_reset_token(db: Session, email: str) -> None:
+    """Generate a time-limited reset token and log the reset URL to stdout.
+
+    Returns silently whether or not the email exists, so the endpoint
+    never leaks registered addresses.
+    """
+    import time
+
+    user = db.query(User).filter(User.email == email).first()
+    if user is None:
+        _reset_logger.info("Password reset requested for unknown email: %s", email)
+        return
+
+    token = secrets.token_urlsafe(32)
+    _reset_tokens[token] = (user.id, time.time() + _RESET_TOKEN_TTL_SECONDS)
+
+    reset_url = f"http://localhost:5173/reset-password?token={token}"
+    _reset_logger.warning(
+        "\n"
+        "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+        "  PASSWORD RESET REQUESTED for %s\n"
+        "  Open this URL in your browser (valid for 1 hour):\n"
+        "  %s\n"
+        "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━",
+        email,
+        reset_url,
+    )
+
+
+def reset_password(db: Session, token: str, new_password: str) -> None:
+    """Validate a reset token and update the user's password.
+
+    Raises UnauthorizedError if the token is missing, expired, or already used.
+    """
+    import time
+
+    entry = _reset_tokens.get(token)
+    if entry is None:
+        raise UnauthorizedError("Invalid or expired password reset token")
+
+    user_id, expiry = entry
+    if time.time() > expiry:
+        del _reset_tokens[token]
+        raise UnauthorizedError("Password reset token has expired. Request a new one.")
+
+    user = db.query(User).filter(User.id == user_id).first()
+    if user is None:
+        raise UnauthorizedError("User no longer exists")
+
+    user.hashed_password = hash_password(new_password)
+    db.commit()
+
+    # Invalidate the token after use.
+    del _reset_tokens[token]
+    _reset_logger.info("Password reset successfully for user id=%s", user_id)

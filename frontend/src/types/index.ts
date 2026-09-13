@@ -17,6 +17,16 @@ export interface User {
 
 export type VideoSourceType = 'upload' | 'url' | 'text';
 
+/**
+ * The submitter's self-declared copyright basis for the source material.
+ * Informational only — never a gate to submission.
+ */
+export type CopyrightDeclaration =
+  | 'own_content'
+  | 'licensed'
+  | 'public_domain'
+  | 'fair_use';
+
 export type VideoProjectStatus =
   | 'pending'
   | 'downloading'
@@ -49,6 +59,8 @@ export interface VideoProject {
   framing_mode: FramingMode;
   caption_style: CaptionStylePreset;
   auto_broll: boolean;
+  /** Self-declared copyright basis for the source material. `null` for pre-existing rows. */
+  copyright_declaration: CopyrightDeclaration | null;
   created_at: string;
   updated_at: string;
 }
@@ -182,7 +194,7 @@ export type CaptionStylePreset =
   | 'karaoke'
   | 'bold_box';
 
-export type BrollSource = 'pexels' | 'pixabay';
+export type BrollSource = 'pexels' | 'pixabay' | 'wikimedia' | 'internet_archive';
 
 export interface BrollAsset {
   id: number;

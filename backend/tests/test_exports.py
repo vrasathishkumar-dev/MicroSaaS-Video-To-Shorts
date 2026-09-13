@@ -40,6 +40,7 @@ def _make_clip(db_session: Session, user: User, **overrides) -> Clip:
         end_time=10.0,
         order_index=0,
         status=ClipStatus.draft,
+        virality_score=85.0,
     )
     defaults.update(overrides)
     clip = Clip(**defaults)
@@ -352,6 +353,7 @@ class TestAutoBrollToggle:
             end_time=10.0,
             order_index=0,
             status=ClipStatus.draft,
+            virality_score=85.0,
         )
         db_session.add(clip)
         db_session.commit()
@@ -750,3 +752,127 @@ class TestFraming:
         response = client.get(f"/api/v1/clips/{clip.id}/framing", headers=auth_headers)
 
         assert response.status_code == 404
+
+
+class TestScoreGate:
+    def test_export_below_threshold_returns_409(
+        self, client: TestClient, auth_headers: dict[str, str], db_session: Session, test_user: User
+    ) -> None:
+        clip = _make_clip(db_session, test_user, virality_score=42.0)
+        response = client.post(f"/api/v1/clips/{clip.id}/export", headers=auth_headers)
+        assert response.status_code == 409
+        detail = response.json()["detail"]
+        assert detail["code"] == "score_below_threshold"
+        assert detail["virality_score"] == 42.0
+
+    def test_export_below_threshold_with_force_true_succeeds(
+        self, client: TestClient, auth_headers: dict[str, str], db_session: Session, test_user: User
+    ) -> None:
+        clip = _make_clip(db_session, test_user, virality_score=42.0)
+        with patch("app.routers.exports.render_clip", new=_fake_render_success):
+            response = client.post(
+                f"/api/v1/clips/{clip.id}/export?force=true", headers=auth_headers
+            )
+        assert response.status_code == 200
+        body = response.json()
+        assert body["below_threshold"] is True
+        assert body["virality_score"] == 42.0
+
+    def test_export_above_threshold_succeeds_without_force(
+        self, client: TestClient, auth_headers: dict[str, str], db_session: Session, test_user: User
+    ) -> None:
+        clip = _make_clip(db_session, test_user, virality_score=85.0)
+        with patch("app.routers.exports.render_clip", new=_fake_render_success):
+            response = client.post(f"/api/v1/clips/{clip.id}/export", headers=auth_headers)
+        assert response.status_code == 200
+        body = response.json()
+        assert body["below_threshold"] is False
+        assert body["virality_score"] == 85.0
+
+
+class TestBatchExport:
+    def test_batch_export_enqueues_all_draft_clips(
+        self, client: TestClient, auth_headers: dict[str, str], db_session: Session, test_user: User
+    ) -> None:
+        project = VideoProject(
+            user_id=test_user.id,
+            title="Batch project",
+            source_type=SourceType.upload,
+            status=VideoProjectStatus.ready,
+        )
+        db_session.add(project)
+        db_session.commit()
+        db_session.refresh(project)
+
+        c1 = Clip(
+            video_project_id=project.id,
+            user_id=test_user.id,
+            title="C1",
+            start_time=0.0,
+            end_time=5.0,
+            order_index=0,
+            status=ClipStatus.draft,
+        )
+        c2 = Clip(
+            video_project_id=project.id,
+            user_id=test_user.id,
+            title="C2",
+            start_time=5.0,
+            end_time=10.0,
+            order_index=1,
+            status=ClipStatus.draft,
+        )
+        c3 = Clip(
+            video_project_id=project.id,
+            user_id=test_user.id,
+            title="C3",
+            start_time=10.0,
+            end_time=15.0,
+            order_index=2,
+            status=ClipStatus.ready,
+        )
+        db_session.add_all([c1, c2, c3])
+        db_session.commit()
+
+        with patch("app.routers.exports.render_clip", new=_fake_render_success):
+            response = client.post(
+                f"/api/v1/videos/{project.id}/export-all", headers=auth_headers
+            )
+        assert response.status_code == 200
+        body = response.json()
+        assert body["queued"] == 2
+        assert body["already_ready"] == 1
+        assert body["video_project_id"] == project.id
+
+    def test_batch_export_other_user_404(
+        self, client: TestClient, auth_headers: dict[str, str], db_session: Session, other_user: User
+    ) -> None:
+        project = VideoProject(
+            user_id=other_user.id,
+            title="Other project",
+            source_type=SourceType.upload,
+            status=VideoProjectStatus.ready,
+        )
+        db_session.add(project)
+        db_session.commit()
+
+        response = client.post(
+            f"/api/v1/videos/{project.id}/export-all", headers=auth_headers
+        )
+        assert response.status_code == 404
+
+
+class TestEventsSSE:
+    def test_clip_events_sse_stream(
+        self, client: TestClient, db_session: Session, test_user: User
+    ) -> None:
+        clip = _make_clip(db_session, test_user, status=ClipStatus.ready)
+        token = create_access_token({"sub": str(test_user.id)})
+
+        response = client.get(f"/api/v1/clips/{clip.id}/events?token={token}")
+        assert response.status_code == 200
+        assert "text/event-stream" in response.headers["content-type"]
+        assert "status_update" in response.text
+        assert '"status": "ready"' in response.text
+        assert '"pct": 100' in response.text
+
