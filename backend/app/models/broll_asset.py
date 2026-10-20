@@ -21,6 +21,8 @@ class BrollSource(str, enum.Enum):
 
     pexels = "pexels"
     pixabay = "pixabay"
+    wikimedia = "wikimedia"
+    internet_archive = "internet_archive"
 
 
 class BrollAsset(Base):

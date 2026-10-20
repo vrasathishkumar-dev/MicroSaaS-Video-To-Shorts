@@ -570,7 +570,8 @@ def _extract_keywords_with_timing(
     return keyword_timings
 
 
-_FALLBACK_PALETTES: tuple[tuple[tuple[int, int, int], tuple[int, int, int], tuple[int, int, int]], ...] = (
+_PaletteTriple = tuple[tuple[int, int, int], tuple[int, int, int], tuple[int, int, int]]
+_FALLBACK_PALETTES: tuple[_PaletteTriple, ...] = (
     ((13, 27, 42), (27, 38, 59), (56, 189, 248)),
     ((24, 20, 48), (49, 46, 129), (167, 139, 250)),
     ((17, 34, 34), (19, 78, 74), (52, 211, 153)),

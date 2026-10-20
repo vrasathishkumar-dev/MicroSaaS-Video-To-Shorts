@@ -13,7 +13,11 @@ from app.models.base import Base
 
 logger = logging.getLogger(__name__)
 
-DATABASE_URL: str = settings.DATABASE_URL
+_raw_url = settings.DATABASE_URL
+if _raw_url.startswith("postgresql://"):
+    DATABASE_URL: str = _raw_url.replace("postgresql://", "postgresql+psycopg2://", 1)
+else:
+    DATABASE_URL: str = _raw_url
 
 engine = create_engine(DATABASE_URL, pool_pre_ping=True)
 
