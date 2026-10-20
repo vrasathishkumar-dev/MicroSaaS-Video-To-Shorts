@@ -86,8 +86,6 @@ async def _ensure_broll(db: Session, clip: Clip) -> None:
         # Switched off when the video was submitted: no B-roll unless the
         # user adds it themselves in the editor.
         return
-    if not (settings.PEXELS_API_KEY or settings.PIXABAY_API_KEY):
-        return
 
     existing = db.query(BrollAsset).filter(BrollAsset.clip_id == clip.id).count()
     if existing:

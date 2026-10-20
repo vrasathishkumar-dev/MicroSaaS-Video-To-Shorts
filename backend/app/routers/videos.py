@@ -1,16 +1,16 @@
-"""Video project endpoints: upload/create, list, retrieve, delete, (re)process, transcript.
+"""Video project endpoints: upload/create, list, retrieve, delete, (re)process, produce, transcript.
 
 All endpoints require an authenticated user and are scoped to that user's
 own video projects — a project owned by another user resolves to a 404
 (NotFoundError) rather than a 403, so ownership is never leaked.
 
-Video processing (transcription + highlight scoring) is CPU/IO-heavy and
-can take a long time for long videos, so it is never run synchronously
-inside a request handler. `POST /videos` and `POST /videos/{id}/process`
-both schedule `run_process_video_project()` via `app.services.task_queue`,
-which enqueues onto Redis in production (see task_queue.py) or falls back
-to FastAPI's `BackgroundTasks` locally, running after the response has
-been sent.
+Video processing (transcription + highlight scoring + clip generation +
+B-roll sourcing + 9:16 viral rendering) is CPU/IO-heavy and can take a
+long time for long videos, so it is never run synchronously inside a
+request handler. `POST /videos`, `POST /videos/{id}/process`, and
+`POST /videos/{id}/produce` schedule background work via
+`app.services.task_queue`, which enqueues onto Redis in production or
+falls back to FastAPI's `BackgroundTasks` locally.
 """
 
 from __future__ import annotations
@@ -27,7 +27,7 @@ from app.auth.rate_limit import rate_limit_video_submit
 from app.database import SessionLocal
 from app.dependencies import get_current_user, get_db
 from app.exceptions import NotFoundError, ValidationAppError
-from app.models.clip import ClipCaptionStyle, ClipFraming
+from app.models.clip import Clip, ClipCaptionStyle, ClipFraming, ClipStatus
 from app.models.transcript_segment import TranscriptSegment
 from app.models.user import User
 from app.models.video_project import (
@@ -36,18 +36,45 @@ from app.models.video_project import (
     VideoProject,
     VideoProjectStatus,
 )
+from app.schemas.clip import ClipResponse
 from app.schemas.video import (
     PaginatedVideoProjects,
     TranscriptSegmentResponse,
     VideoProjectResponse,
 )
-from app.services import storage, task_queue
+from app.services import clip_service, storage, task_queue
+from app.services.broll_sourcing import auto_source_broll
 from app.services.highlight_detection import detect_highlights
 from app.services.transcription import TranscriptionError, transcribe_video
+from app.services.video_render import render_clip
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/videos", tags=["videos"])
+
+_DEFAULT_PLACEHOLDER_TITLES = frozenset(
+    {"repurposed short clips", "untitled", "untitled video", "podcast short clips"}
+)
+
+
+def _parse_form_bool(value: str | bool | None, *, default: bool) -> bool:
+    """Parse a multipart form boolean reliably across FastAPI/Starlette versions.
+
+    FastAPI >= 0.115 treats `bool = Form(default=True)` as an HTML checkbox
+    and coerces omitted fields to `False`. Accepting `str | bool` with a
+    string default preserves `default=True` when the field is omitted while
+    still honoring explicit `"false"` / `"0"` / `"true"` / `"1"` values.
+    """
+    if value is None:
+        return default
+    if isinstance(value, bool):
+        return value
+    norm = value.strip().lower()
+    if norm in {"true", "1", "yes", "on"}:
+        return True
+    if norm in {"false", "0", "no", "off"}:
+        return False
+    return default
 
 
 def _get_owned_project(db: Session, project_id: int, user: User) -> VideoProject:
@@ -63,8 +90,47 @@ def _get_owned_project(db: Session, project_id: int, user: User) -> VideoProject
     return project
 
 
-async def process_video_project(project_id: int) -> None:
-    """Background pipeline: transcribe a video project and score highlights.
+async def _produce_clips_for_project(db: Session, project: VideoProject) -> None:
+    """Generate clips from highlights, auto-source B-roll, and render 9:16 exports."""
+
+    clips = clip_service.create_clips_from_highlights(
+        db, video_project_id=project.id, user_id=project.user_id
+    )
+    if not clips:
+        return
+
+    # Sort by virality_score descending so the highest-potential viral clip
+    # is produced first.
+    ordered_clips = sorted(
+        clips, key=lambda c: (c.virality_score or 0.0), reverse=True
+    )
+
+    source_exists = bool(
+        project.source_file_path
+        and storage.get_file_path(project.source_file_path).is_file()
+    )
+
+    for clip in ordered_clips:
+        if project.auto_broll:
+            try:
+                await auto_source_broll(db, clip)
+            except Exception:
+                logger.exception(
+                    "Auto-sourcing B-roll failed during pipeline for clip id=%s",
+                    clip.id,
+                )
+                db.rollback()
+
+        if source_exists:
+            clip.status = ClipStatus.rendering
+            db.commit()
+            await asyncio.to_thread(render_clip, clip.id)
+
+
+async def process_video_project(project_id: int, auto_produce: bool = False) -> None:
+    """Background pipeline: transcribe a video project, score highlights, and
+    optionally run end-to-end viral clip generation, B-roll insertion, and
+    9:16 rendering.
 
     Invoked via `app.services.task_queue` (from the create and re-process
     endpoints) -- a real Redis-backed job in production, or FastAPI's
@@ -72,9 +138,9 @@ async def process_video_project(project_id: int) -> None:
     cycle and opens its own DB session rather than reusing a request-scoped
     one.
 
-    Status transitions: transcribing -> analyzing -> ready. On any
-    exception, the project is marked status=failed with error_message set
-    to a human-readable summary of the failure, and the exception is
+    Status transitions: downloading -> transcribing -> analyzing -> ready.
+    On any exception, the project is marked status=failed with error_message
+    set to a human-readable summary of the failure, and the exception is
     swallowed here (a background job must never raise into its runner).
     """
 
@@ -99,6 +165,12 @@ async def process_video_project(project_id: int) -> None:
                     project.source_file_path = await storage.download_from_url(
                         project.source_url, "videos"
                     )
+                    extracted_title = storage.get_downloaded_title(project.source_file_path)
+                    if (
+                        extracted_title
+                        and project.title.strip().lower() in _DEFAULT_PLACEHOLDER_TITLES
+                    ):
+                        project.title = extracted_title
                     db.commit()
                     file_path = str(storage.get_file_path(project.source_file_path))
                 else:
@@ -139,6 +211,15 @@ async def process_video_project(project_id: int) -> None:
 
             project.status = VideoProjectStatus.ready
             db.commit()
+
+            if auto_produce:
+                try:
+                    await _produce_clips_for_project(db, project)
+                except Exception:
+                    logger.exception(
+                        "Auto-produce clips failed for project %s; project remains ready",
+                        project_id,
+                    )
         except Exception as exc:
             logger.error(
                 "process_video_project failed for project %s: %s",
@@ -156,14 +237,52 @@ async def process_video_project(project_id: int) -> None:
         db.close()
 
 
-def run_process_video_project(project_id: int) -> None:
+def run_process_video_project(project_id: int, auto_produce: bool = False) -> None:
     """Sync entrypoint for `process_video_project`, for use as a queueable
     job. RQ workers (and, for that matter, Starlette's BackgroundTasks
     running a sync callable) call jobs as plain functions, not coroutines
     -- this just drives the async pipeline via its own event loop.
     """
 
-    asyncio.run(process_video_project(project_id))
+    asyncio.run(process_video_project(project_id, auto_produce=auto_produce))
+
+
+def run_produce_project_clips(project_id: int) -> None:
+    """Sync background worker entrypoint to source B-roll and render all
+    draft/failed clips for an already-ready project."""
+
+    async def _run() -> None:
+        db: Session = SessionLocal()
+        try:
+            project = (
+                db.query(VideoProject).filter(VideoProject.id == project_id).first()
+            )
+            if project is None:
+                return
+            clips = (
+                db.query(Clip)
+                .filter(Clip.video_project_id == project.id)
+                .order_by(Clip.order_index.asc())
+                .all()
+            )
+            for clip in clips:
+                if clip.status == ClipStatus.ready and clip.video_file_path:
+                    continue
+                if project.auto_broll:
+                    try:
+                        await auto_source_broll(db, clip)
+                    except Exception:
+                        logger.exception(
+                            "Auto-sourcing B-roll failed for clip id=%s", clip.id
+                        )
+                        db.rollback()
+                clip.status = ClipStatus.rendering
+                db.commit()
+                await asyncio.to_thread(render_clip, clip.id)
+        finally:
+            db.close()
+
+    asyncio.run(_run())
 
 
 @router.post("", response_model=VideoProjectResponse, status_code=status.HTTP_201_CREATED)
@@ -175,7 +294,8 @@ async def create_video_project(
     target_clip_length: ClipLength = Form(default=ClipLength.auto),
     framing_mode: ClipFraming = Form(default=ClipFraming.speaker_focus),
     caption_style: ClipCaptionStyle = Form(default=ClipCaptionStyle.hormozi),
-    auto_broll: bool = Form(default=True),
+    auto_broll: str = Form(default="true"),
+    auto_produce: str = Form(default="false"),
     file: UploadFile | None = File(default=None),
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
@@ -186,12 +306,9 @@ async def create_video_project(
     "url"), and either a `file` part (required when source_type="upload")
     or a `source_url` form field (required when source_type="url").
 
-    The remaining fields are what the submit form's options write, and they
-    are what makes the generated shorts come out as asked:
-    `target_clip_length` decides how long the clips are cut,
-    `framing_mode` and `caption_style` become every generated clip's own
-    settings, and `auto_broll` decides whether B-roll is sourced for them.
-    All four have defaults, so a bare submission still works.
+    When `auto_produce=True`, the background pipeline also generates the
+    viral short clips, attaches keyword-synced B-roll, and renders the 9:16
+    MP4 exports automatically.
     """
 
     rate_limit_video_submit(user.id)
@@ -200,6 +317,9 @@ async def create_video_project(
         raise ValidationAppError("source_url is required when source_type is 'url'")
     if source_type == SourceType.upload and file is None:
         raise ValidationAppError("file is required when source_type is 'upload'")
+
+    auto_broll_bool = _parse_form_bool(auto_broll, default=True)
+    auto_produce_bool = _parse_form_bool(auto_produce, default=False)
 
     project = VideoProject(
         user_id=user.id,
@@ -210,7 +330,7 @@ async def create_video_project(
         target_clip_length=target_clip_length,
         framing_mode=framing_mode,
         caption_style=caption_style,
-        auto_broll=auto_broll,
+        auto_broll=auto_broll_bool,
     )
 
     if file is not None:
@@ -221,7 +341,12 @@ async def create_video_project(
     db.commit()
     db.refresh(project)
 
-    task_queue.enqueue(background_tasks, run_process_video_project, project.id)
+    if auto_produce_bool:
+        task_queue.enqueue(
+            background_tasks, run_process_video_project, project.id, True
+        )
+    else:
+        task_queue.enqueue(background_tasks, run_process_video_project, project.id)
     return project
 
 
@@ -279,6 +404,7 @@ async def delete_video_project(
 async def reprocess_video_project(
     project_id: int,
     background_tasks: BackgroundTasks,
+    auto_produce: bool = False,
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
 ) -> VideoProject:
@@ -292,8 +418,51 @@ async def reprocess_video_project(
     db.commit()
     db.refresh(project)
 
-    task_queue.enqueue(background_tasks, run_process_video_project, project.id)
+    if auto_produce:
+        task_queue.enqueue(
+            background_tasks, run_process_video_project, project.id, True
+        )
+    else:
+        task_queue.enqueue(background_tasks, run_process_video_project, project.id)
     return project
+
+
+@router.post("/{project_id}/produce", response_model=list[ClipResponse])
+async def produce_video_project(
+    project_id: int,
+    background_tasks: BackgroundTasks,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+) -> list[Clip]:
+    """Generate clips (if none exist yet), attach B-roll, and render all clips
+    into 9:16 viral shorts for an already-processed video project."""
+
+    project = _get_owned_project(db, project_id, user)
+    if project.status != VideoProjectStatus.ready:
+        raise ValidationAppError(
+            "Video project must be status=ready before producing viral clips"
+        )
+
+    clips = (
+        db.query(Clip)
+        .filter(Clip.video_project_id == project.id, Clip.user_id == user.id)
+        .order_by(Clip.order_index.asc())
+        .all()
+    )
+    if not clips:
+        clips = clip_service.create_clips_from_highlights(
+            db, video_project_id=project.id, user_id=user.id
+        )
+
+    for clip in clips:
+        if clip.status != ClipStatus.ready or not clip.video_file_path:
+            clip.status = ClipStatus.rendering
+    db.commit()
+    for clip in clips:
+        db.refresh(clip)
+
+    task_queue.enqueue(background_tasks, run_produce_project_clips, project.id)
+    return clips
 
 
 @router.get("/{project_id}/transcript", response_model=list[TranscriptSegmentResponse])

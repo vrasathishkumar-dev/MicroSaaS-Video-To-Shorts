@@ -109,7 +109,7 @@ const STATS = [
 
 /* ── Component ── */
 export function HomePage() {
-  const [heroMode, setHeroMode] = useState<'url' | 'text'>('text');
+  const [heroMode, setHeroMode] = useState<'url' | 'text'>('url');
   const [quickUrl, setQuickUrl] = useState('');
   const [quickPrompt, setQuickPrompt] = useState('');
   const navigate = useNavigate();
@@ -120,7 +120,8 @@ export function HomePage() {
       const q = quickPrompt.trim();
       navigate('/generate' + (q ? `?prompt=${encodeURIComponent(q)}` : ''));
     } else {
-      navigate('/videos/new');
+      const u = quickUrl.trim();
+      navigate('/videos/new' + (u ? `?url=${encodeURIComponent(u)}` : ''));
     }
   };
 

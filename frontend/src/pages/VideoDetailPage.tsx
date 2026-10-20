@@ -6,6 +6,8 @@ import {
   Scissors,
   Flame,
   AlertCircle,
+  Wand2,
+  Loader2,
 } from 'lucide-react';
 import { ClipCard } from '@/components/clips/ClipCard';
 import { GlassCard } from '@/components/ui/GlassCard';
@@ -15,7 +17,12 @@ import { ProcessingProgress } from '@/components/videos/ProcessingProgress';
 import { StatusBadge } from '@/components/videos/StatusBadge';
 import { cn } from '@/lib/utils';
 import { generateClips, listClips, deleteClip } from '@/services/clipService';
-import { getTranscript, getVideo, reprocessVideo } from '@/services/videoService';
+import {
+  getTranscript,
+  getVideo,
+  produceVideo,
+  reprocessVideo,
+} from '@/services/videoService';
 import { getExpectedShortsCount } from '@/lib/virality';
 import type { Clip, TranscriptSegment, VideoProject, VideoProjectStatus } from '@/types';
 
@@ -44,6 +51,7 @@ export function VideoDetailPage() {
 
   const [clips, setClips] = useState<Clip[]>([]);
   const [isGenerating, setIsGenerating] = useState(false);
+  const [isProducing, setIsProducing] = useState(false);
   const [generateError, setGenerateError] = useState<string | null>(null);
 
   const [pollTrigger, setPollTrigger] = useState(0);
@@ -62,7 +70,6 @@ export function VideoDetailPage() {
         setVideo(data);
         setError(null);
 
-        // If the project finished processing, stop active interval and refresh data
         if (TERMINAL_STATUSES.includes(data.status)) {
           if (intervalId) clearInterval(intervalId);
         }
@@ -82,11 +89,14 @@ export function VideoDetailPage() {
     };
   }, [videoId, pollTrigger]);
 
-  // Once the project is ready, load its transcript and check for existing clips.
+  // Once the project is ready, load its transcript and poll clips while any clip is rendering
+  // or while the end-to-end auto-produce pipeline is still spinning up clips.
   useEffect(() => {
     if (!video || video.status !== 'ready') return;
 
     let cancelled = false;
+    let clipPollCount = 0;
+
     getTranscript(video.id)
       .then((segments) => {
         if (!cancelled) setTranscript(segments);
@@ -97,18 +107,40 @@ export function VideoDetailPage() {
         }
       });
 
-    listClips(video.id)
-      .then((response) => {
-        if (!cancelled) setClips(response.items);
-      })
-      .catch(() => {
+    async function fetchClips() {
+      try {
+        const response = await listClips(video!.id);
+        if (!cancelled) {
+          setClips(response.items);
+          if (
+            response.items.length > 0 &&
+            response.items.every((c) => c.status !== 'rendering')
+          ) {
+            setIsProducing(false);
+          }
+        }
+      } catch {
         // Non-critical
+      }
+    }
+
+    void fetchClips();
+    const clipInterval = setInterval(() => {
+      clipPollCount += 1;
+      setClips((current) => {
+        const hasRendering = current.some((c) => c.status === 'rendering');
+        if (hasRendering || isProducing || (current.length === 0 && clipPollCount <= 10)) {
+          void fetchClips();
+        }
+        return current;
       });
+    }, POLL_INTERVAL_MS);
 
     return () => {
       cancelled = true;
+      clearInterval(clipInterval);
     };
-  }, [video?.id, video?.status]);
+  }, [video?.id, video?.status, isProducing]);
 
   async function handleStartProcessing() {
     if (!video) return;
@@ -117,7 +149,6 @@ export function VideoDetailPage() {
     try {
       const updated = await reprocessVideo(video.id);
       setVideo(updated);
-      // Restart active polling
       setPollTrigger((prev) => prev + 1);
     } catch {
       setReprocessError('Failed to start processing. Please try again.');
@@ -137,6 +168,19 @@ export function VideoDetailPage() {
       setGenerateError('Failed to generate clips. Please try again.');
     } finally {
       setIsGenerating(false);
+    }
+  }
+
+  async function handleProduceAll() {
+    if (!video) return;
+    setIsProducing(true);
+    setGenerateError(null);
+    try {
+      const updatedClips = await produceVideo(video.id);
+      setClips(updatedClips);
+    } catch {
+      setIsProducing(false);
+      setGenerateError('Failed to start viral video & B-roll production. Please try again.');
     }
   }
 
@@ -173,13 +217,14 @@ export function VideoDetailPage() {
   }
 
   const isProcessing = !TERMINAL_STATUSES.includes(video.status);
+  const anyClipRendering = clips.some((c) => c.status === 'rendering');
   const highlightsCount = transcript?.filter((t) => t.is_highlight).length ?? 0;
 
   return (
     <PageWrapper className="mx-auto max-w-5xl px-4 py-8 space-y-6">
       <ProcessingProgress
         status={video.status}
-        isGeneratingClips={isGenerating}
+        isGeneratingClips={isGenerating || isProducing || anyClipRendering}
       />
 
       {/* Project Overview Card */}
@@ -226,10 +271,14 @@ export function VideoDetailPage() {
           </div>
         )}
 
-        {isProcessing && (
+        {(isProcessing || anyClipRendering) && (
           <div className="mt-4 rounded-xl border border-primary/20 bg-primary/5 p-3 text-xs text-primary flex items-center gap-2">
             <Sparkles className="h-4 w-4 animate-spin shrink-0" />
-            <span>AI transcription & highlight detection is actively processing...</span>
+            <span>
+              {anyClipRendering
+                ? 'Auto-sourcing B-roll footage & rendering 9:16 viral Shorts with burned-in captions...'
+                : 'AI transcription & highlight detection is actively processing...'}
+            </span>
           </div>
         )}
 
@@ -243,18 +292,36 @@ export function VideoDetailPage() {
 
         <div className="mt-6 flex flex-wrap items-center gap-3">
           {video.status === 'ready' ? (
-            <GradientButton
-              onClick={handleGenerateClips}
-              disabled={isGenerating}
-              className="gap-2 shadow-lg shadow-primary/20"
-            >
-              <Scissors className="h-4 w-4" />
-              {isGenerating
-                ? 'Generating Shorts…'
-                : clips.length > 0
-                  ? 'Re-generate Clips'
-                  : 'Generate Viral Shorts'}
-            </GradientButton>
+            <>
+              <GradientButton
+                onClick={handleProduceAll}
+                disabled={isProducing || anyClipRendering || isGenerating}
+                className="gap-2 shadow-lg shadow-primary/20"
+              >
+                {isProducing || anyClipRendering ? (
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                ) : (
+                  <Wand2 className="h-4 w-4" />
+                )}
+                {isProducing || anyClipRendering
+                  ? 'Producing Viral Shorts + B-Roll…'
+                  : 'Produce Viral Videos + B-Roll (9:16)'}
+              </GradientButton>
+
+              <GradientButton
+                variant="outline"
+                onClick={handleGenerateClips}
+                disabled={isGenerating || isProducing || anyClipRendering}
+                className="gap-2"
+              >
+                <Scissors className="h-4 w-4" />
+                {isGenerating
+                  ? 'Generating Shorts…'
+                  : clips.length > 0
+                    ? 'Re-generate Clips'
+                    : 'Generate Viral Shorts'}
+              </GradientButton>
+            </>
           ) : (
             <GradientButton
               onClick={handleStartProcessing}

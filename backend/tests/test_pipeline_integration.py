@@ -1,8 +1,8 @@
 """End-to-end integration test for the core promise of the product:
 
     submit a video URL -> download it -> transcribe it -> detect
-    highlights -> generate Shorts-length clips -> export one as a real
-    9:16 MP4.
+    highlights -> generate Shorts-length clips -> attach B-roll -> export
+    as a real 9:16 MP4.
 
 Every other test file exercises one module in isolation, usually with
 neighboring modules mocked out (e.g. test_videos.py mocks transcribe_video
@@ -13,9 +13,10 @@ real (if tiny) video file -- which is exactly the kind of gap that let the
 source_file_path and B-roll bugs slip through earlier. This test wires
 everything together for real, with only two things faked:
 
-  - the "internet": a local HTTP server stands in for wherever the user's
-    video URL actually points, since the app's real SSRF guard correctly
-    rejects loopback addresses -- see the `_assert_public_http_url`
+  - the "internet": a local HTTP server (or in-process httpx transport when
+    the OS sandbox forbids binding a TCP socket) stands in for wherever the
+    user's video URL actually points, since the app's real SSRF guard
+    correctly rejects loopback addresses -- see the `_assert_public_http_url`
     monkeypatch below.
   - the Whisper API: TRANSCRIPTION_API_KEY is cleared so the real
     fallback-transcript code path runs (still exercising the real
@@ -33,10 +34,12 @@ import threading
 from pathlib import Path
 from unittest.mock import AsyncMock
 
+import httpx
 import pytest
 from fastapi.testclient import TestClient
 
 import app.routers.videos as video_router_module
+from app.config import settings
 
 pytestmark = pytest.mark.skipif(
     shutil.which("ffmpeg") is None, reason="ffmpeg binary not available"
@@ -62,6 +65,8 @@ def _make_test_source_video(path: Path, duration: float = 300.0) -> None:
             "-shortest",
             "-c:v",
             "libx264",
+            "-preset",
+            "ultrafast",
             "-c:a",
             "aac",
             str(path),
@@ -76,15 +81,47 @@ class _QuietStaticHandler(http.server.SimpleHTTPRequestHandler):
         pass  # silence request logging in test output
 
 
+class _DummyServerAddress:
+    def __init__(self, port: int = 8999) -> None:
+        self.server_address = ("127.0.0.1", port)
+
+
 @pytest.fixture
-def source_http_server(tmp_path):  # type: ignore[no-untyped-def]
+def source_http_server(tmp_path, monkeypatch: pytest.MonkeyPatch):  # type: ignore[no-untyped-def]
     """A local HTTP server standing in for the real internet host a user's
-    video URL would point to."""
+    video URL would point to. Falls back to an in-process httpx MockTransport
+    when running inside a sandbox that forbids TCP socket binds."""
 
     serve_dir = tmp_path / "source_server"
     serve_dir.mkdir()
     handler = functools.partial(_QuietStaticHandler, directory=str(serve_dir))
-    server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), handler)
+    try:
+        server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), handler)
+    except PermissionError:
+        orig_async_client = httpx.AsyncClient
+
+        def _handle_request(request: httpx.Request) -> httpx.Response:
+            rel = request.url.path.lstrip("/")
+            file_path = serve_dir / rel
+            if file_path.is_file():
+                return httpx.Response(
+                    200,
+                    headers={"content-type": "video/mp4"},
+                    content=file_path.read_bytes(),
+                )
+            return httpx.Response(404)
+
+        transport = httpx.MockTransport(_handle_request)
+        monkeypatch.setattr(
+            httpx,
+            "AsyncClient",
+            lambda *args, **kwargs: orig_async_client(
+                *args, transport=transport, **kwargs
+            ),
+        )
+        yield _DummyServerAddress(8999), serve_dir
+        return
+
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
     try:
@@ -191,6 +228,7 @@ def test_url_to_9x16_short_end_to_end(
         "disk_usage",
         lambda _path: shutil._ntuple_diskusage(total=0, used=0, free=100 * 1024 * 1024 * 1024),
     )
+    monkeypatch.setattr(settings, "RENDER_PRESET", "ultrafast")
     # The synthetic source is a colour card with silent audio: real
     # transcription (correctly) finds no speech in it, and running Whisper
     # in the suite would cost a model download and minutes per run. The
@@ -276,3 +314,84 @@ def test_url_to_9x16_short_end_to_end(
     )
     width, height = (int(v) for v in probe.stdout.strip().split(","))
     assert (width, height) == (1080, 1920), "export is not 9:16"
+
+
+def test_podcast_url_auto_produce_with_broll_end_to_end(
+    client: TestClient,
+    auth_headers: dict[str, str],
+    source_http_server,  # noqa: ANN001
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Zero-click end-to-end test: submitting a podcast URL with auto_produce=true
+    downloads the video, transcribes it, detects viral highlights, creates clips,
+    attaches B-roll (via synthesized fallback when no stock API keys are set),
+    and renders the finished 9:16 MP4 automatically."""
+
+    server, serve_dir = source_http_server
+    port = server.server_address[1]
+    _make_test_source_video(serve_dir / "podcast.mp4", duration=120.0)
+
+    import app.services.storage as storage_module
+
+    monkeypatch.setattr(storage_module, "_assert_public_http_url", lambda url: None)
+    monkeypatch.setattr(
+        storage_module.shutil,
+        "disk_usage",
+        lambda _path: shutil._ntuple_diskusage(
+            total=0, used=0, free=100 * 1024 * 1024 * 1024
+        ),
+    )
+    monkeypatch.setattr(settings, "PEXELS_API_KEY", "")
+    monkeypatch.setattr(settings, "PIXABAY_API_KEY", "")
+    monkeypatch.setattr(settings, "RENDER_PRESET", "ultrafast")
+
+    short_transcript = [
+        {
+            "start_time": 0.0,
+            "end_time": 10.0,
+            "text": "Here's the secret nobody tells you about building a startup.",
+        },
+        {
+            "start_time": 10.0,
+            "end_time": 25.0,
+            "text": "The biggest mistake founders make is ignoring customer feedback.",
+        },
+        {
+            "start_time": 25.0,
+            "end_time": 45.0,
+            "text": "When we focused on our core product, revenue doubled in six months.",
+        },
+    ]
+    monkeypatch.setattr(
+        video_router_module,
+        "transcribe_video",
+        AsyncMock(return_value=short_transcript),
+    )
+
+    create_resp = client.post(
+        "/api/v1/videos",
+        data={
+            "title": "Podcast Episode #1",
+            "source_type": "url",
+            "source_url": f"http://127.0.0.1:{port}/podcast.mp4",
+            "auto_broll": "true",
+            "auto_produce": "true",
+        },
+        headers=auth_headers,
+    )
+    assert create_resp.status_code == 201
+    project_id = create_resp.json()["id"]
+
+    clips_resp = client.get(
+        "/api/v1/clips",
+        params={"video_project_id": project_id},
+        headers=auth_headers,
+    )
+    assert clips_resp.status_code == 200
+    clips = clips_resp.json()["items"]
+    assert len(clips) >= 1
+    top_clip = clips[0]
+    assert top_clip["status"] == "ready"
+    assert top_clip["video_file_path"]
+    assert len(top_clip["broll_assets"]) >= 1
+    assert Path(top_clip["video_file_path"]).is_file()

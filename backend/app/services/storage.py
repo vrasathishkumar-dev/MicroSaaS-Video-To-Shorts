@@ -9,6 +9,7 @@ path via `get_file_path()`.
 import asyncio
 import contextlib
 import ipaddress
+import json
 import logging
 import re
 import shutil
@@ -105,9 +106,45 @@ def _download_via_ytdlp(url: str, target_dir: Path, filename_stem: str) -> Path:
     try:
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             info = ydl.extract_info(url, download=True)
+            if isinstance(info, dict):
+                meta_path = target_dir / f"{filename_stem}.meta.json"
+                with contextlib.suppress(Exception):
+                    meta_path.write_text(
+                        json.dumps(
+                            {
+                                "title": info.get("title"),
+                                "duration": info.get("duration"),
+                                "uploader": info.get("uploader"),
+                            }
+                        ),
+                        encoding="utf-8",
+                    )
+            # Best-effort subtitle fetch (auto-captions / manual English VTT)
+            with contextlib.suppress(Exception):
+                sub_opts = {
+                    "skip_download": True,
+                    "writesubtitles": True,
+                    "writeautomaticsub": True,
+                    "subtitleslangs": ["en.*", "en"],
+                    "subtitlesformat": "vtt",
+                    "outtmpl": outtmpl,
+                    "quiet": True,
+                    "no_warnings": True,
+                    "no_color": True,
+                    "noplaylist": True,
+                    "socket_timeout": 15,
+                }
+                with yt_dlp.YoutubeDL(sub_opts) as sub_ydl:
+                    sub_ydl.download([url])
+
             actual_path = Path(ydl.prepare_filename(info))
             if not actual_path.exists():
-                candidates = list(target_dir.glob(f"{filename_stem}.*"))
+                non_video_suffixes = {".vtt", ".srt", ".json", ".part", ".ytdl"}
+                candidates = [
+                    p
+                    for p in target_dir.glob(f"{filename_stem}.*")
+                    if p.suffix.lower() not in non_video_suffixes
+                ]
                 if candidates:
                     return candidates[0]
                 raise ValidationAppError("yt-dlp downloaded file not found")
@@ -334,3 +371,21 @@ def get_file_path(relative_path: str) -> Path:
     """Resolve a relative path (as returned by save_upload()) to an absolute Path."""
 
     return UPLOAD_ROOT / relative_path
+
+
+def get_downloaded_title(relative_path: str | None) -> str | None:
+    """Return the extracted source title for a downloaded video if saved alongside it."""
+    if not relative_path:
+        return None
+    video_path = get_file_path(relative_path)
+    meta_path = video_path.with_suffix(".meta.json")
+    if not meta_path.is_file():
+        return None
+    try:
+        data = json.loads(meta_path.read_text(encoding="utf-8"))
+        title = data.get("title")
+        if isinstance(title, str) and title.strip():
+            return title.strip()[:255]
+    except Exception:
+        return None
+    return None

@@ -17,6 +17,10 @@ Two backends, chosen by `TRANSCRIPTION_BACKEND`:
   self-hosted Whisper servers implement the same shape, so swapping
   providers should mostly mean changing TRANSCRIPTION_API_URL.
 
+If a sidecar `.vtt` subtitle track was downloaded alongside a YouTube video
+via `yt-dlp` and the configured Whisper backend is unavailable, the real
+YouTube timed captions are parsed into segments as a fallback.
+
 `auto` (the default) takes the API when a key is configured and local
 otherwise, so a fresh checkout transcribes for real with nothing to set up.
 """
@@ -25,6 +29,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
 import tempfile
 from functools import lru_cache
 from pathlib import Path
@@ -38,6 +43,11 @@ logger = logging.getLogger(__name__)
 TRANSCRIPTION_API_URL = "https://api.openai.com/v1/audio/transcriptions"
 TRANSCRIPTION_MODEL = "whisper-1"
 REQUEST_TIMEOUT_SECONDS = 600.0  # transcription of long videos can take a while
+
+_VTT_CUE_RE = re.compile(
+    r"(?:(\d{2}):)?(\d{2}):(\d{2})[.,](\d{3})\s*-->\s*(?:(\d{2}):)?(\d{2}):(\d{2})[.,](\d{3})"
+)
+_VTT_TAG_RE = re.compile(r"<[^>]+>")
 
 
 class TranscriptionError(Exception):
@@ -63,6 +73,86 @@ def _extract_audio_for_whisper(video_path: Path, output_audio_path: Path) -> boo
     except Exception as exc:
         logger.warning("Could not extract audio via ffmpeg: %s", exc)
         return False
+
+
+def parse_vtt_subtitles(vtt_path: Path) -> list[dict]:
+    """Parse a WebVTT subtitle file into clean, non-overlapping transcript segments."""
+    if not vtt_path.is_file():
+        return []
+    raw_text = vtt_path.read_text(encoding="utf-8", errors="replace")
+    blocks = re.split(r"\r?\n\r?\n+", raw_text)
+    cues: list[dict] = []
+    last_text = ""
+
+    for block in blocks:
+        lines = [line.strip() for line in block.splitlines() if line.strip()]
+        if not lines:
+            continue
+        match = None
+        cue_idx = 0
+        for idx, line in enumerate(lines):
+            m = _VTT_CUE_RE.search(line)
+            if m:
+                match = m
+                cue_idx = idx
+                break
+        if match is None:
+            continue
+
+        h1, m1, s1, ms1, h2, m2, s2, ms2 = match.groups()
+        start = (
+            int(h1 or 0) * 3600
+            + int(m1) * 60
+            + int(s1)
+            + int(ms1) / 1000.0
+        )
+        end = (
+            int(h2 or 0) * 3600
+            + int(m2) * 60
+            + int(s2)
+            + int(ms2) / 1000.0
+        )
+        if end <= start:
+            continue
+
+        text_lines = lines[cue_idx + 1 :]
+        clean_lines: list[str] = []
+        for tline in text_lines:
+            cleaned = _VTT_TAG_RE.sub("", tline).strip()
+            if cleaned and cleaned != last_text:
+                clean_lines.append(cleaned)
+                last_text = cleaned
+        text = " ".join(clean_lines).strip()
+        if not text:
+            continue
+
+        # Merge micro-cues from rolling YouTube auto-captions into 3-8s spoken phrases
+        if (
+            cues
+            and start - cues[-1]["end_time"] <= 0.6
+            and (end - cues[-1]["start_time"]) <= 7.5
+            and not str(cues[-1]["text"]).endswith((".", "!", "?"))
+        ):
+            cues[-1]["end_time"] = round(end, 2)
+            cues[-1]["text"] = f"{cues[-1]['text']} {text}".strip()
+        else:
+            cues.append(
+                {
+                    "start_time": round(start, 2),
+                    "end_time": round(end, 2),
+                    "text": text,
+                }
+            )
+    return cues
+
+
+def _find_sidecar_vtt(video_path: Path) -> Path | None:
+    """Locate any yt-dlp downloaded `.vtt` subtitle file matching `video_path`'s stem."""
+    parent = video_path.parent
+    if not parent.is_dir():
+        return None
+    candidates = sorted(parent.glob(f"{video_path.stem}*.vtt"))
+    return candidates[0] if candidates else None
 
 
 @lru_cache(maxsize=2)
@@ -153,10 +243,10 @@ async def transcribe_video(file_path: str) -> list[dict]:
     in chronological order.
 
     Runs local Whisper or the hosted API depending on
-    `TRANSCRIPTION_BACKEND` (see the module docstring). Raises rather than
-    inventing a transcript: everything downstream -- which moments become
-    shorts, their titles, their captions -- is built on what comes back
-    from here, so a wrong transcript is worse than a failed job.
+    `TRANSCRIPTION_BACKEND` (see the module docstring). If a sidecar `.vtt`
+    subtitle track exists next to `file_path` (downloaded by `yt-dlp`) and
+    the configured Whisper backend raises a `TranscriptionError`, falls back
+    to the real timed YouTube subtitles.
 
     Raises:
         TranscriptionError: the file is missing, no backend is usable, the
@@ -167,6 +257,8 @@ async def transcribe_video(file_path: str) -> list[dict]:
     if not path.exists():
         raise TranscriptionError(f"File not found for transcription: {file_path}")
 
+    sidecar_vtt = _find_sidecar_vtt(path)
+
     backend = _backend()
     temp_audio_file = Path(tempfile.mktemp(suffix=".mp3"))
     try:
@@ -176,8 +268,20 @@ async def transcribe_video(file_path: str) -> list[dict]:
         source_path = temp_audio_file if has_audio else path
 
         if backend == "local":
-            # Whisper is CPU-bound and blocks; keep the event loop free.
-            return await asyncio.to_thread(_transcribe_locally, source_path)
+            try:
+                # Whisper is CPU-bound and blocks; keep the event loop free.
+                return await asyncio.to_thread(_transcribe_locally, source_path)
+            except TranscriptionError:
+                if sidecar_vtt is not None:
+                    vtt_segments = parse_vtt_subtitles(sidecar_vtt)
+                    if vtt_segments:
+                        logger.info(
+                            "Using YouTube sidecar VTT captions (%d segments) for %s",
+                            len(vtt_segments),
+                            file_path,
+                        )
+                        return vtt_segments
+                raise
 
         headers = {"Authorization": f"Bearer {settings.TRANSCRIPTION_API_KEY}"}
         data = {"model": TRANSCRIPTION_MODEL, "response_format": "verbose_json"}
@@ -192,6 +296,10 @@ async def transcribe_video(file_path: str) -> list[dict]:
             )
             response.raise_for_status()
     except httpx.HTTPStatusError as exc:
+        if sidecar_vtt is not None:
+            vtt_segments = parse_vtt_subtitles(sidecar_vtt)
+            if vtt_segments:
+                return vtt_segments
         logger.error(
             "Transcription API returned %s for %s: %s",
             exc.response.status_code,
@@ -202,6 +310,10 @@ async def transcribe_video(file_path: str) -> list[dict]:
             f"Transcription API error ({exc.response.status_code})"
         ) from exc
     except httpx.HTTPError as exc:
+        if sidecar_vtt is not None:
+            vtt_segments = parse_vtt_subtitles(sidecar_vtt)
+            if vtt_segments:
+                return vtt_segments
         logger.error("Transcription API request failed for %s: %s", file_path, exc)
         raise TranscriptionError("Transcription API request failed") from exc
     finally:

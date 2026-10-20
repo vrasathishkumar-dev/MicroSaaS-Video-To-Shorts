@@ -19,6 +19,7 @@ from app.services.transcription import (
     TranscriptionError,
     _backend,
     _transcribe_locally,
+    parse_vtt_subtitles,
     transcribe_video,
 )
 
@@ -100,6 +101,52 @@ class TestLocalTranscription:
             ),
         ), pytest.raises(TranscriptionError, match="faster-whisper"):
             _transcribe_locally(Path("audio.mp3"))
+
+
+class TestSidecarVttFallback:
+    def test_parses_vtt_subtitles_and_merges_rolling_cues(self, tmp_path: Path) -> None:
+        vtt_file = tmp_path / "podcast.en.vtt"
+        vtt_file.write_text(
+            "WEBVTT\n\n"
+            "00:00:00.000 --> 00:00:02.500\n"
+            "Here's the secret nobody tells you\n\n"
+            "00:00:02.600 --> 00:00:05.200\n"
+            "about building a startup from scratch.\n\n"
+            "00:00:08.000 --> 00:00:12.000\n"
+            "It comes down to distribution and focus.\n",
+            encoding="utf-8",
+        )
+        segments = parse_vtt_subtitles(vtt_file)
+        assert len(segments) == 2
+        assert segments[0]["start_time"] == 0.0
+        assert segments[0]["end_time"] == 5.2
+        assert "secret nobody tells you about building" in segments[0]["text"]
+        assert segments[1]["start_time"] == 8.0
+        assert segments[1]["end_time"] == 12.0
+
+    @pytest.mark.asyncio
+    async def test_falls_back_to_sidecar_vtt_when_whisper_unavailable(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(settings, "TRANSCRIPTION_BACKEND", "local")
+        video_file = tmp_path / "podcast123.mp4"
+        video_file.write_bytes(b"stand-in video")
+        vtt_file = tmp_path / "podcast123.en.vtt"
+        vtt_file.write_text(
+            "WEBVTT\n\n"
+            "00:00:01.000 --> 00:00:04.000\n"
+            "Welcome to the podcast episode.\n",
+            encoding="utf-8",
+        )
+
+        with patch(
+            "app.services.transcription._transcribe_locally",
+            side_effect=TranscriptionError("faster-whisper not installed"),
+        ):
+            segments = await transcribe_video(str(video_file))
+
+        assert len(segments) == 1
+        assert segments[0]["text"] == "Welcome to the podcast episode."
 
 
 class TestApiTranscription:

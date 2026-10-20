@@ -1,4 +1,4 @@
-import api from '@/services/api';
+import api, { API_URL, getAccessToken } from '@/services/api';
 import type { BrollAsset, BrollSource } from '@/types';
 
 /**
@@ -38,6 +38,23 @@ export interface InsertBrollPayload {
 /** Shape of GET /clips/{id} when the backend embeds its broll assets. */
 interface ClipWithOptionalBroll {
   broll_assets?: BrollAsset[];
+}
+
+/**
+ * Resolve a BrollAsset's playable URL. Remote http(s) URLs are returned as-is;
+ * server-synthesized relative paths are streamed through the authenticated
+ * preview endpoint.
+ */
+export function resolveBrollAssetUrl(asset: BrollAsset): string {
+  if (
+    asset.asset_url.startsWith('http://') ||
+    asset.asset_url.startsWith('https://')
+  ) {
+    return asset.asset_url;
+  }
+  const token = getAccessToken();
+  const query = token ? `?token=${encodeURIComponent(token)}` : '';
+  return `${API_URL}/api/v1/clips/${asset.clip_id}/broll/${asset.id}/preview${query}`;
 }
 
 /**

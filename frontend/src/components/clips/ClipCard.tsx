@@ -1,5 +1,5 @@
 import { motion } from 'framer-motion';
-import { Clock, Trash2, Play, Download } from 'lucide-react';
+import { Clock, Trash2, Play, Download, Film } from 'lucide-react';
 import { Link } from 'react-router-dom';
 import { cn } from '@/lib/utils';
 import { clipToViralityInsights } from '@/lib/virality';
@@ -31,6 +31,7 @@ export function ClipCard({ clip, onDelete, className }: ClipCardProps) {
   const rawDuration = clip.end_time - clip.start_time;
   const duration = formatDuration(rawDuration);
   const virality = clipToViralityInsights(clip);
+  const brollCount = clip.broll_assets?.length ?? 0;
 
   return (
     <motion.div
@@ -81,6 +82,14 @@ export function ClipCard({ clip, onDelete, className }: ClipCardProps) {
           >
             {clip.status}
           </span>
+
+          {/* Bottom-left B-roll count badge */}
+          {brollCount > 0 && (
+            <div className="absolute bottom-3 left-3 flex items-center gap-1 rounded-full bg-primary/85 px-2 py-0.5 text-[10px] font-semibold text-white backdrop-blur-md">
+              <Film className="h-3 w-3" />
+              <span>{brollCount} B-Roll</span>
+            </div>
+          )}
 
           {/* Bottom-right duration badge */}
           <div className="absolute bottom-3 right-3 flex items-center gap-1 rounded-full bg-black/80 px-2 py-0.5 text-[10px] font-mono text-white backdrop-blur-md">

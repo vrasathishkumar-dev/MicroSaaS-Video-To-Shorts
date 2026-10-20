@@ -15,6 +15,9 @@ from __future__ import annotations
 import asyncio
 import logging
 import re
+import shutil
+import subprocess
+import uuid
 from collections import Counter
 
 import httpx
@@ -23,6 +26,7 @@ from sqlalchemy.orm import Session
 from app.config import settings
 from app.models.broll_asset import BrollAsset, BrollSource
 from app.models.clip import Clip
+from app.services.storage import UPLOAD_ROOT
 
 logger = logging.getLogger(__name__)
 
@@ -566,6 +570,101 @@ def _extract_keywords_with_timing(
     return keyword_timings
 
 
+_FALLBACK_PALETTES: tuple[tuple[tuple[int, int, int], tuple[int, int, int], tuple[int, int, int]], ...] = (
+    ((13, 27, 42), (27, 38, 59), (56, 189, 248)),
+    ((24, 20, 48), (49, 46, 129), (167, 139, 250)),
+    ((17, 34, 34), (19, 78, 74), (52, 211, 153)),
+    ((39, 22, 28), (127, 29, 29), (251, 146, 60)),
+)
+
+
+def _synthesize_local_broll(keyword: str, index: int, duration: float) -> dict | None:
+    """Synthesize a visual B-roll cutaway card under uploads/broll/ when no
+    stock provider keys are configured.
+
+    Generates a 720x1280 vertical MP4 with a styled visual card for `keyword`
+    so the exported 9:16 video always receives real B-roll overlays even in
+    offline or zero-key environments.
+    """
+    if shutil.which("ffmpeg") is None:
+        return None
+
+    broll_dir = UPLOAD_ROOT / "broll"
+    broll_dir.mkdir(parents=True, exist_ok=True)
+    safe_slug = re.sub(r"[^a-z0-9]+", "_", keyword.lower()).strip("_")[:24] or "scene"
+    asset_id = f"local_{safe_slug}_{uuid.uuid4().hex[:8]}"
+    output_path = broll_dir / f"{asset_id}.mp4"
+    card_png = broll_dir / f"{asset_id}.png"
+    clip_dur = max(3.0, min(duration, 10.0))
+
+    bg_top, bg_bot, accent = _FALLBACK_PALETTES[index % len(_FALLBACK_PALETTES)]
+    try:
+        from PIL import Image, ImageDraw, ImageFont
+
+        width, height = 720, 1280
+        img = Image.new("RGB", (width, height), bg_top)
+        draw = ImageDraw.Draw(img)
+        for y in range(height):
+            t = y / max(height - 1, 1)
+            r = int(bg_top[0] * (1 - t) + bg_bot[0] * t)
+            g = int(bg_top[1] * (1 - t) + bg_bot[1] * t)
+            b = int(bg_top[2] * (1 - t) + bg_bot[2] * t)
+            draw.line([(0, y), (width, y)], fill=(r, g, b))
+
+        # Subtle accent frame + visual topic badge
+        draw.rounded_rectangle(
+            [(48, 220), (width - 48, height - 220)],
+            radius=36,
+            outline=accent,
+            width=6,
+        )
+        font = ImageFont.load_default()
+        label = keyword.upper()
+        draw.text((96, height // 2 - 20), f"B-ROLL: {label}", fill=accent, font=font)
+        img.save(card_png, format="PNG")
+
+        subprocess.run(
+            [
+                "ffmpeg",
+                "-y",
+                "-loop",
+                "1",
+                "-i",
+                str(card_png),
+                "-t",
+                f"{clip_dur:.2f}",
+                "-vf",
+                "fps=30,format=yuv420p",
+                "-c:v",
+                "libx264",
+                "-preset",
+                "ultrafast",
+                "-an",
+                str(output_path),
+            ],
+            check=True,
+            capture_output=True,
+            timeout=30,
+        )
+    except Exception as exc:
+        logger.warning("Could not synthesize local fallback B-roll for %r: %s", keyword, exc)
+        return None
+    finally:
+        card_png.unlink(missing_ok=True)
+
+    if not output_path.is_file() or output_path.stat().st_size == 0:
+        output_path.unlink(missing_ok=True)
+        return None
+
+    return {
+        "source": "pexels",
+        "source_asset_id": asset_id,
+        "asset_url": f"broll/{output_path.name}",
+        "duration": clip_dur,
+        "keyword": keyword,
+    }
+
+
 async def auto_source_broll(db: Session, clip: Clip) -> list[BrollAsset]:
     """Automatically source and attach B-roll footage timed precisely to spoken words.
 
@@ -595,11 +694,16 @@ async def auto_source_broll(db: Session, clip: Clip) -> list[BrollAsset]:
         *(_search_all_providers(kw) for kw, _, _ in kw_timings)
     )
 
+    no_provider_keys = not (settings.PEXELS_API_KEY or settings.PIXABAY_API_KEY)
     created: list[BrollAsset] = []
     used: set[tuple[str, str]] = set()
-    for (kw, pos_start, pos_end), results in zip(kw_timings, search_results, strict=True):
+    for idx, ((kw, pos_start, pos_end), results) in enumerate(
+        zip(kw_timings, search_results, strict=True)
+    ):
         window = pos_end - pos_start
         pick = _choose_asset(results, used, window)
+        if pick is None and no_provider_keys:
+            pick = await asyncio.to_thread(_synthesize_local_broll, kw, idx, window)
         if pick is None:
             logger.info("No usable B-roll found for keyword=%r on clip_id=%s", kw, clip.id)
             continue

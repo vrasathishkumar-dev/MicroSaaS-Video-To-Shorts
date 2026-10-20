@@ -738,6 +738,14 @@ def create_clips_from_highlights(
     clusters = _cluster_raw_segments(highlight_segments)
     windows = _pad_clusters(clusters, 0.0, ceiling, target, maximum)
 
+    # Clear existing draft clips for this project so re-generating clips
+    # replaces drafts rather than duplicating them.
+    db.query(Clip).filter(
+        Clip.video_project_id == video_project_id,
+        Clip.user_id == user_id,
+        Clip.status == ClipStatus.draft,
+    ).delete(synchronize_session=False)
+
     clips: list[Clip] = []
     previous_end = 0.0
     for index, (start_time, end_time, anchor_segment) in enumerate(windows):

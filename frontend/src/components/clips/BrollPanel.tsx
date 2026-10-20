@@ -18,6 +18,7 @@ import {
   autoSourceBroll,
   getClipBrollAssets,
   removeBroll,
+  resolveBrollAssetUrl,
 } from '@/services/brollService';
 import type { BrollAsset, BrollPlacement } from '@/types';
 
@@ -192,7 +193,7 @@ export function BrollPanel({ clipId, placement, onPlacementChange }: BrollPanelP
                     file, and autoplaying one per attached asset makes the
                     panel crawl. */}
                 <video
-                  src={asset.asset_url}
+                  src={resolveBrollAssetUrl(asset) || asset.asset_url}
                   muted
                   loop
                   playsInline

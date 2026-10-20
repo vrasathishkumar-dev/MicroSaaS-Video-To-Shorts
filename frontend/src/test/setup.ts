@@ -2,6 +2,47 @@ import '@testing-library/jest-dom';
 import { afterEach, vi } from 'vitest';
 import { cleanup } from '@testing-library/react';
 
+// Node 22+/25+ defines an experimental global `localStorage` getter that
+// returns an incomplete object unless `--localstorage-file` is passed,
+// shadowing jsdom's Storage implementation. Install a standard in-memory
+// Storage when `localStorage.clear` is not a function.
+if (
+  typeof window !== 'undefined' &&
+  (!window.localStorage || typeof window.localStorage.clear !== 'function')
+) {
+  const store = new Map<string, string>();
+  const storageMock: Storage = {
+    get length() {
+      return store.size;
+    },
+    clear() {
+      store.clear();
+    },
+    getItem(key: string) {
+      return store.has(key) ? (store.get(key) ?? null) : null;
+    },
+    key(index: number) {
+      return Array.from(store.keys())[index] ?? null;
+    },
+    removeItem(key: string) {
+      store.delete(key);
+    },
+    setItem(key: string, value: string) {
+      store.set(String(key), String(value));
+    },
+  };
+  Object.defineProperty(window, 'localStorage', {
+    value: storageMock,
+    configurable: true,
+    writable: true,
+  });
+  Object.defineProperty(globalThis, 'localStorage', {
+    value: storageMock,
+    configurable: true,
+    writable: true,
+  });
+}
+
 // Ensure each test starts from a clean DOM/mocks.
 afterEach(() => {
   cleanup();

@@ -9,16 +9,18 @@ Clip Library router's /clips, /clips/{id}, /clips/{id}/reorder paths.
 from __future__ import annotations
 
 from fastapi import APIRouter, Depends, Query
+from fastapi.responses import FileResponse, RedirectResponse, Response
 from sqlalchemy.orm import Session
 
 from app.auth.rate_limit import rate_limit_broll
-from app.dependencies import get_current_user, get_db
+from app.dependencies import get_current_user, get_current_user_for_media, get_db
 from app.exceptions import NotFoundError
 from app.models.broll_asset import BrollAsset, BrollSource
 from app.models.clip import Clip
 from app.models.user import User
 from app.schemas.broll import BrollAssetResponse, BrollInsertRequest, BrollSearchResult
 from app.services.broll_sourcing import auto_source_broll, search_pexels, search_pixabay
+from app.services.storage import UPLOAD_ROOT
 
 router = APIRouter(tags=["broll"])
 
@@ -113,6 +115,37 @@ async def insert_clip_broll(
     db.commit()
     db.refresh(asset)
     return asset
+
+
+@router.get("/clips/{clip_id}/broll/{broll_id}/preview")
+async def preview_clip_broll(
+    clip_id: int,
+    broll_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user_for_media),
+) -> Response:
+    """Stream a local B-roll asset or redirect to its remote provider URL."""
+
+    clip = _get_owned_clip(db, clip_id, current_user)
+    asset = (
+        db.query(BrollAsset)
+        .filter(BrollAsset.id == broll_id, BrollAsset.clip_id == clip.id)
+        .first()
+    )
+    if asset is None:
+        raise NotFoundError("BrollAsset")
+
+    if asset.asset_url.startswith(("http://", "https://")):
+        return RedirectResponse(url=asset.asset_url)
+
+    local_path = (UPLOAD_ROOT / asset.asset_url).resolve()
+    try:
+        local_path.relative_to(UPLOAD_ROOT.resolve())
+    except ValueError as exc:
+        raise NotFoundError("BrollAsset") from exc
+    if not local_path.is_file():
+        raise NotFoundError("BrollAsset")
+    return FileResponse(path=local_path, media_type="video/mp4")
 
 
 @router.delete("/clips/{clip_id}/broll/{broll_id}", status_code=204)

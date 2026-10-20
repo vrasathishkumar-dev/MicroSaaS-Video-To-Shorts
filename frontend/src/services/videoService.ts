@@ -2,6 +2,7 @@ import type { AxiosProgressEvent } from 'axios';
 import api from '@/services/api';
 import type {
   CaptionStylePreset,
+  Clip,
   ClipLength,
   FramingMode,
   PaginatedResponse,
@@ -21,6 +22,8 @@ export interface SubmitVideoPayload {
   framingMode: FramingMode;
   captionStyle: CaptionStylePreset;
   autoBroll: boolean;
+  /** When true, automatically generates clips, adds B-roll, and renders 9:16 MP4s. */
+  autoProduce?: boolean;
 }
 
 /** Fetch a page of the current user's video projects. */
@@ -65,6 +68,9 @@ export async function submitVideo(
   formData.append('framing_mode', payload.framingMode);
   formData.append('caption_style', payload.captionStyle);
   formData.append('auto_broll', String(payload.autoBroll));
+  if (payload.autoProduce !== undefined) {
+    formData.append('auto_produce', String(payload.autoProduce));
+  }
 
   const { data } = await api.post<VideoProject>('/videos', formData, {
     onUploadProgress,
@@ -80,6 +86,12 @@ export async function deleteVideo(id: number): Promise<void> {
 /** Kick off (re)processing of a video project's pipeline. */
 export async function reprocessVideo(id: number): Promise<VideoProject> {
   const { data } = await api.post<VideoProject>(`/videos/${id}/process`);
+  return data;
+}
+
+/** Produce all viral shorts (generate clips + auto B-roll + 9:16 render) for a project. */
+export async function produceVideo(id: number): Promise<Clip[]> {
+  const { data } = await api.post<Clip[]>(`/videos/${id}/produce`);
   return data;
 }
 

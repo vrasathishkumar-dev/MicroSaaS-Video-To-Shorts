@@ -1,5 +1,6 @@
 import type { AxiosError, AxiosProgressEvent } from 'axios';
-import { useState, useRef } from 'react';
+import { useState, useRef, useEffect } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import {
   Upload,
   Link as LinkIcon,
@@ -9,6 +10,7 @@ import {
   Video,
   Sliders,
   PlaySquare,
+  Wand2,
 } from 'lucide-react';
 import { GradientButton } from '@/components/ui/GradientButton';
 import { cn } from '@/lib/utils';
@@ -36,10 +38,13 @@ const PLATFORMS = [
 ];
 
 export function VideoSubmitForm({ onSuccess }: VideoSubmitFormProps) {
+  const [searchParams] = useSearchParams();
+  const initialUrl = searchParams.get('url')?.trim() ?? '';
+
   const [mode, setMode] = useState<SubmitMode>('url');
-  const [title, setTitle] = useState('');
+  const [title, setTitle] = useState(initialUrl ? 'Repurposed Short Clips' : '');
   const [file, setFile] = useState<File | null>(null);
-  const [sourceUrl, setSourceUrl] = useState('');
+  const [sourceUrl, setSourceUrl] = useState(initialUrl);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [uploadProgress, setUploadProgress] = useState<number | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -49,8 +54,18 @@ export function VideoSubmitForm({ onSuccess }: VideoSubmitFormProps) {
   const [subtitleStyle, setSubtitleStyle] = useState<CaptionStylePreset>('hormozi');
   const [framingMode, setFramingMode] = useState<FramingMode>('speaker_focus');
   const [autoBroll, setAutoBroll] = useState(true);
+  const [autoProduce, setAutoProduce] = useState(true);
 
   const fileInputRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    const paramUrl = searchParams.get('url')?.trim();
+    if (paramUrl) {
+      setMode('url');
+      setSourceUrl(paramUrl);
+      setTitle((prev) => prev || 'Repurposed Short Clips');
+    }
+  }, [searchParams]);
 
   const canSubmit =
     title.trim().length > 0 &&
@@ -98,6 +113,7 @@ export function VideoSubmitForm({ onSuccess }: VideoSubmitFormProps) {
           framingMode,
           captionStyle: subtitleStyle,
           autoBroll,
+          autoProduce,
         },
         (progressEvent: AxiosProgressEvent) => {
           if (progressEvent.total) {
@@ -135,7 +151,7 @@ export function VideoSubmitForm({ onSuccess }: VideoSubmitFormProps) {
           )}
         >
           <LinkIcon className="h-3.5 w-3.5" />
-          Paste Video URL
+          Paste Podcast / Video URL
         </button>
         <button
           type="button"
@@ -172,7 +188,7 @@ export function VideoSubmitForm({ onSuccess }: VideoSubmitFormProps) {
       {mode === 'url' ? (
         <div className="flex flex-col gap-2">
           <label htmlFor="video-url" className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">
-            Video Link
+            Podcast / YouTube Video Link
           </label>
           <div className="relative">
             <input
@@ -185,7 +201,7 @@ export function VideoSubmitForm({ onSuccess }: VideoSubmitFormProps) {
                   setTitle('Repurposed Short Clips');
                 }
               }}
-              placeholder="Paste YouTube, TikTok, Twitch, or Vimeo link..."
+              placeholder="Paste YouTube podcast, TikTok, Twitch, or Vimeo link..."
               className="w-full rounded-xl border border-glass-border bg-background/60 pl-4 pr-10 py-3 text-sm text-foreground outline-none transition-colors focus:border-primary focus:ring-1 focus:ring-primary"
             />
             <Sparkles className="absolute right-3.5 top-3.5 h-4 w-4 text-primary pointer-events-none" />
@@ -263,6 +279,44 @@ export function VideoSubmitForm({ onSuccess }: VideoSubmitFormProps) {
           </div>
         </div>
       )}
+
+      {/* End-to-End Viral Production + B-Roll Toggle */}
+      <button
+        type="button"
+        onClick={() => setAutoProduce((on) => !on)}
+        aria-pressed={autoProduce}
+        className={cn(
+          'flex w-full items-center justify-between rounded-xl border px-3.5 py-3 text-left transition-all',
+          autoProduce
+            ? 'border-primary/50 bg-primary/10 shadow-sm'
+            : 'border-glass-border bg-background/50',
+        )}
+      >
+        <span className="flex items-center gap-2.5">
+          <Wand2 className="h-4 w-4 text-primary shrink-0" />
+          <span className="space-y-0.5">
+            <span className="block text-xs font-semibold text-foreground">
+              End-to-End Viral Production + B-Roll
+            </span>
+            <span className="block text-[11px] text-muted-foreground">
+              Automatically cut viral hooks, insert keyword-synced B-roll &amp; render 9:16 MP4s
+            </span>
+          </span>
+        </span>
+        <span
+          className={cn(
+            'ml-3 flex h-5 w-9 shrink-0 items-center rounded-full px-0.5 transition-colors',
+            autoProduce ? 'bg-primary' : 'bg-muted',
+          )}
+        >
+          <span
+            className={cn(
+              'h-4 w-4 rounded-full bg-white transition-transform',
+              autoProduce ? 'translate-x-4' : 'translate-x-0',
+            )}
+          />
+        </span>
+      </button>
 
       {/* AI Settings Toggle */}
       <div className="rounded-xl border border-glass-border bg-glass-bg p-3 backdrop-blur-md">
@@ -428,7 +482,11 @@ export function VideoSubmitForm({ onSuccess }: VideoSubmitFormProps) {
         className="w-full py-3.5 text-sm font-bold gap-2 shadow-lg shadow-primary/20"
       >
         <Sparkles className="h-4 w-4" />
-        {isSubmitting ? 'Ingesting & Generating Shorts…' : 'Generate Viral Shorts'}
+        {isSubmitting
+          ? 'Ingesting & Producing Viral Shorts…'
+          : autoProduce
+            ? 'Produce Viral Shorts + B-Roll'
+            : 'Generate Viral Shorts'}
       </GradientButton>
     </form>
   );

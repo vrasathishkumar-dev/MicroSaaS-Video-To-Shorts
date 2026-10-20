@@ -39,7 +39,10 @@ import {
   updateClip,
 } from '@/services/clipService';
 import type { UpdateClipPayload } from '@/services/clipService';
-import { getClipBrollAssets } from '@/services/brollService';
+import {
+  getClipBrollAssets,
+  resolveBrollAssetUrl,
+} from '@/services/brollService';
 import { getTranscript } from '@/services/videoService';
 import {
   triggerExport,
@@ -573,7 +576,7 @@ export function ClipEditorPage() {
                 {activeBroll && (
                   <div className="absolute top-4 right-4 z-20 w-32 aspect-video rounded-xl overflow-hidden border-2 border-primary shadow-2xl animate-in fade-in zoom-in-95 duration-200">
                     <video
-                      src={activeBroll.asset_url}
+                      src={resolveBrollAssetUrl(activeBroll) || activeBroll.asset_url}
                       muted
                       autoPlay
                       loop
