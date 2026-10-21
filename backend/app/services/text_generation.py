@@ -7,6 +7,9 @@ with:
 3. Exact pacing designed for short-form video platforms (Shorts, Reels, TikTok).
 
 Supports:
+- OpenRouter Free mode (``OPENROUTER_API_KEY`` configured, or ``OPENAI_API_KEY``
+  starting with ``sk-or-``): Defaults to ``openrouter/free`` with automatic
+  failover across top ``:free`` models on OpenRouter.
 - OpenAI mode (``OPENAI_API_KEY`` configured): Uses ``gpt-4o-mini`` to write
   vivid, punchy storytelling scripts.
 - Smart Story Heuristic Engine (zero-config local mode): Expands prompt ideas
@@ -21,6 +24,14 @@ import re
 import textwrap
 
 logger = logging.getLogger(__name__)
+
+_FREE_OPENROUTER_FALLBACK_MODELS: tuple[str, ...] = (
+    "openrouter/free",
+    "meta-llama/llama-3.3-70b-instruct:free",
+    "google/gemma-3-27b-it:free",
+    "qwen/qwen-2.5-72b-instruct:free",
+    "mistralai/mistral-small-3.1-24b-instruct:free",
+)
 
 
 class ScriptSegment:
@@ -47,6 +58,26 @@ class ScriptSegment:
         )
 
 
+def _resolve_llm_credentials() -> tuple[str, str | None, str] | None:
+    """Return `(api_key, base_url, model)` for OpenRouter or OpenAI if configured."""
+    from app.config import settings
+
+    openrouter_key = getattr(settings, "OPENROUTER_API_KEY", "").strip()
+    openai_key = getattr(settings, "OPENAI_API_KEY", "").strip()
+    base_url = getattr(
+        settings, "OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1"
+    ).strip()
+    model = getattr(settings, "OPENROUTER_MODEL", "openrouter/free").strip()
+
+    if openrouter_key:
+        return openrouter_key, base_url, (model or "openrouter/free")
+    if openai_key.startswith("sk-or-"):
+        return openai_key, base_url, (model or "openrouter/free")
+    if openai_key:
+        return openai_key, None, "gpt-4o-mini"
+    return None
+
+
 # ---------------------------------------------------------------------------
 # Public entry-point
 # ---------------------------------------------------------------------------
@@ -58,22 +89,31 @@ def generate_script(
 ) -> list[ScriptSegment]:
     """Generate ``shorts_count`` complete short-form video stories.
 
-    Tries OpenAI first if an API key is configured, otherwise uses the smart
-    procedural story generator.
+    Tries OpenRouter (free models) / OpenAI first if an API key is configured,
+    otherwise uses the smart procedural story generator.
     """
-    from app.config import settings
-
-    if getattr(settings, "OPENAI_API_KEY", None):
+    creds = _resolve_llm_credentials()
+    if creds is not None:
+        api_key, base_url, model = creds
         try:
-            return _openai_generate(title, description, shorts_count, settings.OPENAI_API_KEY)
+            return _openai_generate(
+                title,
+                description,
+                shorts_count,
+                api_key,
+                base_url=base_url,
+                model=model,
+            )
         except Exception:
-            logger.exception("OpenAI generation failed — falling back to smart story engine")
+            logger.exception(
+                "LLM script generation failed — falling back to smart story engine"
+            )
 
     return _heuristic_generate(title, description, shorts_count)
 
 
 # ---------------------------------------------------------------------------
-# OpenAI path
+# OpenRouter / OpenAI path
 # ---------------------------------------------------------------------------
 
 _SYSTEM_PROMPT = textwrap.dedent("""
@@ -105,19 +145,39 @@ _SYSTEM_PROMPT = textwrap.dedent("""
 """).strip()
 
 
+def _extract_json_payload(raw: str) -> str:
+    """Extract a JSON array or object from raw LLM output, stripping fences or prose."""
+    cleaned = raw.strip()
+    if cleaned.startswith("```"):
+        cleaned = re.sub(r"^```(?:json)?\s*", "", cleaned, flags=re.IGNORECASE)
+        cleaned = re.sub(r"\s*```$", "", cleaned).strip()
+    start_arr = cleaned.find("[")
+    end_arr = cleaned.rfind("]")
+    if start_arr != -1 and end_arr > start_arr:
+        return cleaned[start_arr : end_arr + 1]
+    return cleaned
+
+
 def _openai_generate(
     title: str,
     description: str,
     shorts_count: int,
     api_key: str,
+    *,
+    base_url: str | None = None,
+    model: str = "gpt-4o-mini",
 ) -> list[ScriptSegment]:
-    """Call GPT-4o-mini and parse a JSON array of multi-scene stories."""
+    """Call OpenRouter (with free-model failover) or OpenAI chat completions."""
     try:
         import openai
     except ImportError as exc:
         raise RuntimeError("openai package not installed — run `pip install openai`") from exc
 
-    client = openai.OpenAI(api_key=api_key)
+    client = (
+        openai.OpenAI(api_key=api_key, base_url=base_url)
+        if base_url
+        else openai.OpenAI(api_key=api_key)
+    )
 
     user_prompt = (
         f"Topic Series: {title}\n"
@@ -125,20 +185,49 @@ def _openai_generate(
         f"Generate exactly {shorts_count} distinct, full 30-second short-form stories."
     )
 
-    logger.info("Calling OpenAI gpt-4o-mini for %d short stories on topic %r", shorts_count, title)
+    models_to_try = [model]
+    if base_url:
+        for fallback_model in _FREE_OPENROUTER_FALLBACK_MODELS:
+            if fallback_model not in models_to_try:
+                models_to_try.append(fallback_model)
 
-    response = client.chat.completions.create(
-        model="gpt-4o-mini",
-        messages=[
-            {"role": "system", "content": _SYSTEM_PROMPT},
-            {"role": "user", "content": user_prompt},
-        ],
-        temperature=0.7,
-        max_tokens=1200 * shorts_count,
-        response_format={"type": "json_object"},
-    )
+    last_exc: Exception | None = None
+    raw = "[]"
+    for candidate_model in models_to_try:
+        try:
+            logger.info(
+                "Calling LLM (%s via %s) for %d short stories on topic %r",
+                candidate_model,
+                base_url or "openai",
+                shorts_count,
+                title,
+            )
+            kwargs: dict[str, object] = {
+                "model": candidate_model,
+                "messages": [
+                    {"role": "system", "content": _SYSTEM_PROMPT},
+                    {"role": "user", "content": user_prompt},
+                ],
+                "temperature": 0.7,
+                "max_tokens": 1200 * shorts_count,
+            }
+            if not base_url:
+                kwargs["response_format"] = {"type": "json_object"}
 
-    raw = response.choices[0].message.content or "[]"
+            response = client.chat.completions.create(**kwargs)  # type: ignore[arg-type]
+            raw = _extract_json_payload(response.choices[0].message.content or "[]")
+            break
+        except Exception as exc:
+            last_exc = exc
+            logger.warning(
+                "Model %s failed (%s); trying next free model if available",
+                candidate_model,
+                exc,
+            )
+    else:
+        if last_exc is not None:
+            raise last_exc
+
     parsed = json.loads(raw)
     if isinstance(parsed, dict):
         for v in parsed.values():
@@ -146,10 +235,15 @@ def _openai_generate(
                 parsed = v
                 break
         else:
-            raise ValueError(f"OpenAI returned unexpected JSON shape: {raw[:200]}")
+            raise ValueError(f"LLM returned unexpected JSON shape: {raw[:200]}")
+
+    if not isinstance(parsed, list):
+        raise ValueError(f"LLM returned non-list JSON: {raw[:200]}")
 
     segments: list[ScriptSegment] = []
     for i, item in enumerate(parsed[:shorts_count]):
+        if not isinstance(item, dict):
+            continue
         narration = str(item.get("narration", description)).strip()
         kws = [str(k) for k in item.get("keywords", [title])]
         if len(kws) < 3:
@@ -165,7 +259,6 @@ def _openai_generate(
             )
         )
 
-    # Pad if GPT returned fewer than requested
     while len(segments) < shorts_count:
         i = len(segments)
         segments.append(_build_story_segment(title, description, i, shorts_count))
@@ -306,7 +399,6 @@ def _heuristic_generate(
     """Generate structured, engaging 30-second video stories without external AI."""
     lower_context = f"{title} {description}".lower()
 
-    # Check curated thematic stories first (for popular examples like monkey / space)
     for theme, stories in _CURATED_THEMES.items():
         if theme in lower_context:
             segments: list[ScriptSegment] = []
@@ -328,28 +420,24 @@ def _heuristic_generate(
                 )
             return segments
 
-    # Procedural multi-scene story generator for any custom topic
-    # 1. Parse individual points from description if the user entered bullet points or commas
     sub_topics = _split_into_topics(description)
-    segments: list[ScriptSegment] = []
+    out_segments: list[ScriptSegment] = []
 
     for i in range(shorts_count):
         topic = sub_topics[i % len(sub_topics)] if sub_topics else description
         seg = _build_story_segment(title, topic, i, shorts_count)
-        segments.append(seg)
+        out_segments.append(seg)
 
-    return segments
+    return out_segments
 
 
 def _split_into_topics(text: str) -> list[str]:
     """Extract distinct fact points from numbered lists, semicolons, or sentence groups."""
-    # Check for numbered items (1., 2., Fact 1:)
     numbered = re.split(r"(?:\d+[\.\)]\s*|Fact\s*\d+:?\s*)", text.strip())
     cleaned_numbered = [p.strip(" ,;\n") for p in numbered if len(p.strip(" ,;\n")) > 15]
     if len(cleaned_numbered) >= 2:
         return cleaned_numbered
 
-    # Check for comma / semicolon separated clauses
     clauses = re.split(r"[;•\n]+", text.strip())
     cleaned_clauses = [c.strip(" ,;\n") for c in clauses if len(c.strip(" ,;\n")) > 15]
     if len(cleaned_clauses) >= 2:
@@ -369,7 +457,6 @@ def _build_story_segment(
     clean_topic = topic_text.strip(" .!?,;")
     kws = _extract_keywords(f"{main_title} {topic_text}", max_keywords=4)
 
-    # Narrative arc (Hook -> Core explanation -> Fascinating twist -> Punchline)
     hook = f"Did you know this mind-blowing truth about {main_title}?"
     development = (
         f"{clean_topic}. Researchers and scientists have uncovered evidence that fundamentally "
@@ -386,7 +473,6 @@ def _build_story_segment(
     narration = f"{hook} {development} {twist} {conclusion}"
     part_title = f"{main_title} — Fact {index + 1}" if total_count > 1 else main_title
 
-    # Generate 4 distinct scene keywords so each scene changes visual footage
     scene_keywords = [
         f"{kws[0]} dramatic" if len(kws) > 0 else "nature landscape",
         f"{kws[1]} detail" if len(kws) > 1 else "technology science",

@@ -55,11 +55,11 @@ class BrollPlacement(str, enum.Enum):
 
     One choice for the whole clip -- every attached BrollAsset renders in
     this spot, the same way `framing_mode` is one choice for the whole
-    clip rather than per shot. `bottom_right` is a small bordered
-    picture-in-picture card (today's only look, kept as the default so
-    existing clips render unchanged); `top`/`bottom` are a full-width band
-    across that third of the frame; `split` is an even half-and-half stack
-    with the main video in the other half.
+    clip rather than per shot. `bottom` is a full-width band across the
+    bottom third of the frame (default); `split` is an even half-and-half
+    stack with the main video in the top half and B-roll in the bottom half;
+    `top` is a full-width band across the top third; `bottom_right` is a
+    bordered picture-in-picture corner card.
     """
 
     bottom_right = "bottom_right"
@@ -88,8 +88,6 @@ class Clip(Base, TimestampMixin):
         Enum(ClipStatus, name="clip_status"), default=ClipStatus.draft, nullable=False
     )
     caption_text: Mapped[str | None] = mapped_column(Text, nullable=True)
-    # Editor choices that the export has to honour -- a clip rendered with
-    # framing or captions the user didn't pick is a bug they can see.
     framing_mode: Mapped[ClipFraming] = mapped_column(
         Enum(ClipFraming, name="clip_framing"),
         default=ClipFraming.speaker_focus,
@@ -104,23 +102,13 @@ class Clip(Base, TimestampMixin):
     )
     broll_placement: Mapped[BrollPlacement] = mapped_column(
         Enum(BrollPlacement, name="broll_placement"),
-        default=BrollPlacement.bottom_right,
-        server_default=BrollPlacement.bottom_right.value,
+        default=BrollPlacement.bottom,
+        server_default=BrollPlacement.bottom.value,
         nullable=False,
     )
     video_file_path: Mapped[str | None] = mapped_column(String(1024), nullable=True)
     thumbnail_path: Mapped[str | None] = mapped_column(String(1024), nullable=True)
 
-    # Server-computed virality scoring (see backlog: "Clip virality score is
-    # fake"). NULL is a real, distinct state -- never coerced to 0 -- so no
-    # server_default: legacy pre-migration rows stay NULL until the scoring
-    # service (backend-agent's work, not this model) populates them on the
-    # clip's next edit or render. `framing_score` is nullable *and* a
-    # pass/fail signal, not a gradient: null = not yet checked (draft, or a
-    # failed render left it stale/invalidated), 1.0 = compute_speaker_framing
-    # returned a SpeakerFraming, 0.0 = it returned None (checked, no
-    # confident subject found). See handoff for how this maps to the
-    # Designer's "Confirmed / Not confident / Not checked" three states.
     virality_score: Mapped[float | None] = mapped_column(Float, nullable=True)
     hook_score: Mapped[float | None] = mapped_column(Float, nullable=True)
     completeness_score: Mapped[float | None] = mapped_column(Float, nullable=True)

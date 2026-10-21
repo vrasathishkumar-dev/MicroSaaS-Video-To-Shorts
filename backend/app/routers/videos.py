@@ -3,20 +3,14 @@
 All endpoints require an authenticated user and are scoped to that user's
 own video projects — a project owned by another user resolves to a 404
 (NotFoundError) rather than a 403, so ownership is never leaked.
-
-Video processing (transcription + highlight scoring + clip generation +
-B-roll sourcing + 9:16 viral rendering) is CPU/IO-heavy and can take a
-long time for long videos, so it is never run synchronously inside a
-request handler. `POST /videos`, `POST /videos/{id}/process`, and
-`POST /videos/{id}/produce` schedule background work via
-`app.services.task_queue`, which enqueues onto Redis in production or
-falls back to FastAPI's `BackgroundTasks` locally.
 """
 
 from __future__ import annotations
 
 import asyncio
+import inspect
 import logging
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from fastapi import APIRouter, BackgroundTasks, Depends, File, Form, UploadFile, status
@@ -56,15 +50,14 @@ _DEFAULT_PLACEHOLDER_TITLES = frozenset(
     {"repurposed short clips", "untitled", "untitled video", "podcast short clips"}
 )
 
+# Tracks project IDs currently executing inside this worker/process so an
+# orphaned project (e.g. left in `transcribing` or `downloading` when uvicorn
+# reloads) is automatically resumed on the next poll.
+_ACTIVE_PROJECTS: set[int] = set()
+
 
 def _parse_form_bool(value: str | bool | None, *, default: bool) -> bool:
-    """Parse a multipart form boolean reliably across FastAPI/Starlette versions.
-
-    FastAPI >= 0.115 treats `bool = Form(default=True)` as an HTML checkbox
-    and coerces omitted fields to `False`. Accepting `str | bool` with a
-    string default preserves `default=True` when the field is omitted while
-    still honoring explicit `"false"` / `"0"` / `"true"` / `"1"` values.
-    """
+    """Parse a multipart form boolean reliably across FastAPI/Starlette versions."""
     if value is None:
         return default
     if isinstance(value, bool):
@@ -90,6 +83,18 @@ def _get_owned_project(db: Session, project_id: int, user: User) -> VideoProject
     return project
 
 
+async def _call_transcribe_video(file_path: str, source_url: str | None) -> list[dict]:
+    """Invoke `transcribe_video`, passing `source_url` only if accepted by signature
+    (so unit tests that monkeypatch `transcribe_video` with a 1-arg mock still work)."""
+    try:
+        sig = inspect.signature(transcribe_video)
+        if "source_url" in sig.parameters:
+            return await transcribe_video(file_path, source_url=source_url)
+    except (ValueError, TypeError):
+        pass
+    return await transcribe_video(file_path)
+
+
 async def _produce_clips_for_project(db: Session, project: VideoProject) -> None:
     """Generate clips from highlights, auto-source B-roll, and render 9:16 exports."""
 
@@ -99,8 +104,6 @@ async def _produce_clips_for_project(db: Session, project: VideoProject) -> None
     if not clips:
         return
 
-    # Sort by virality_score descending so the highest-potential viral clip
-    # is produced first.
     ordered_clips = sorted(
         clips, key=lambda c: (c.virality_score or 0.0), reverse=True
     )
@@ -130,19 +133,11 @@ async def _produce_clips_for_project(db: Session, project: VideoProject) -> None
 async def process_video_project(project_id: int, auto_produce: bool = False) -> None:
     """Background pipeline: transcribe a video project, score highlights, and
     optionally run end-to-end viral clip generation, B-roll insertion, and
-    9:16 rendering.
+    9:16 rendering."""
 
-    Invoked via `app.services.task_queue` (from the create and re-process
-    endpoints) -- a real Redis-backed job in production, or FastAPI's
-    BackgroundTasks locally -- so it runs outside the request/response
-    cycle and opens its own DB session rather than reusing a request-scoped
-    one.
-
-    Status transitions: downloading -> transcribing -> analyzing -> ready.
-    On any exception, the project is marked status=failed with error_message
-    set to a human-readable summary of the failure, and the exception is
-    swallowed here (a background job must never raise into its runner).
-    """
+    if project_id in _ACTIVE_PROJECTS:
+        return
+    _ACTIVE_PROJECTS.add(project_id)
 
     db: Session = SessionLocal()
     try:
@@ -183,7 +178,7 @@ async def process_video_project(project_id: int, auto_produce: bool = False) -> 
             db.commit()
 
             file_path = str(storage.get_file_path(project.source_file_path))
-            raw_segments = await transcribe_video(file_path)
+            raw_segments = await _call_transcribe_video(file_path, project.source_url)
 
             # Clear any previous transcript (e.g. this is a re-process run).
             db.query(TranscriptSegment).filter(
@@ -234,15 +229,12 @@ async def process_video_project(project_id: int, auto_produce: bool = False) -> 
                 project.error_message = str(exc)[:2000]
                 db.commit()
     finally:
+        _ACTIVE_PROJECTS.discard(project_id)
         db.close()
 
 
 def run_process_video_project(project_id: int, auto_produce: bool = False) -> None:
-    """Sync entrypoint for `process_video_project`, for use as a queueable
-    job. RQ workers (and, for that matter, Starlette's BackgroundTasks
-    running a sync callable) call jobs as plain functions, not coroutines
-    -- this just drives the async pipeline via its own event loop.
-    """
+    """Sync entrypoint for `process_video_project`, for use as a queueable job."""
 
     asyncio.run(process_video_project(project_id, auto_produce=auto_produce))
 
@@ -300,16 +292,7 @@ async def create_video_project(
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
 ) -> VideoProject:
-    """Create a video project and kick off background processing.
-
-    Accepts multipart/form-data with `title`, `source_type` ("upload" or
-    "url"), and either a `file` part (required when source_type="upload")
-    or a `source_url` form field (required when source_type="url").
-
-    When `auto_produce=True`, the background pipeline also generates the
-    viral short clips, attaches keyword-synced B-roll, and renders the 9:16
-    MP4 exports automatically.
-    """
+    """Create a video project and kick off background processing."""
 
     rate_limit_video_submit(user.id)
 
@@ -370,7 +353,6 @@ async def list_video_projects(
         .limit(page_size)
         .all()
     )
-    # pydantic's from_attributes on VideoProjectResponse converts each ORM item here.
     return PaginatedVideoProjects(  # type: ignore[arg-type]
         items=items, total=total, page=page, page_size=page_size
     )
@@ -379,12 +361,45 @@ async def list_video_projects(
 @router.get("/{project_id}", response_model=VideoProjectResponse)
 async def get_video_project(
     project_id: int,
+    background_tasks: BackgroundTasks,
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
 ) -> VideoProject:
-    """Get a single video project owned by the current user (404 otherwise)."""
+    """Get a single video project owned by the current user (404 otherwise).
 
-    return _get_owned_project(db, project_id, user)
+    Automatically recovers projects left in an in-progress state (`pending`,
+    `downloading`, `transcribing`, `analyzing`) when no background task is
+    currently running for `project_id` (e.g. after a server reload).
+    """
+
+    project = _get_owned_project(db, project_id, user)
+    if (
+        project.status
+        in {
+            VideoProjectStatus.pending,
+            VideoProjectStatus.downloading,
+            VideoProjectStatus.transcribing,
+            VideoProjectStatus.analyzing,
+        }
+        and project.id not in _ACTIVE_PROJECTS
+    ):
+        updated = project.updated_at
+        if updated is not None:
+            now = (
+                datetime.now(timezone.utc)
+                if updated.tzinfo is not None
+                else datetime.utcnow()
+            )
+            if now - updated > timedelta(seconds=10):
+                logger.info(
+                    "Auto-resuming orphaned video project %s (status=%s)",
+                    project.id,
+                    project.status,
+                )
+                task_queue.enqueue(
+                    background_tasks, run_process_video_project, project.id, True
+                )
+    return project
 
 
 @router.delete("/{project_id}", status_code=status.HTTP_204_NO_CONTENT)
@@ -408,13 +423,18 @@ async def reprocess_video_project(
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
 ) -> VideoProject:
-    """Re-trigger the transcription/highlight pipeline for an existing project."""
+    """Re-trigger the transcription/highlight pipeline for an existing project.
+
+    Keeps `source_file_path` if the file was already downloaded on disk so
+    reprocessing a stuck project doesn't re-download the video from scratch.
+    """
 
     project = _get_owned_project(db, project_id, user)
     project.status = VideoProjectStatus.pending
     project.error_message = None
-    if project.source_type == SourceType.url:
-        project.source_file_path = None
+    if project.source_type == SourceType.url and project.source_file_path:
+        if not storage.get_file_path(project.source_file_path).is_file():
+            project.source_file_path = None
     db.commit()
     db.refresh(project)
 

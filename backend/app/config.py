@@ -18,7 +18,9 @@ class Settings(BaseSettings):
     development. Never hardcode a real secret here.
     """
 
-    model_config = SettingsConfigDict(env_file=".env", extra="ignore")
+    model_config = SettingsConfigDict(
+        env_file=(".env", "../.env"), extra="ignore"
+    )
 
     # App
     APP_NAME: str = "VideoToShorts"
@@ -47,10 +49,13 @@ class Settings(BaseSettings):
     PEXELS_API_KEY: str = ""
     PIXABAY_API_KEY: str = ""
 
-    # OpenAI API key for text-to-shorts script generation.
-    # Leave empty to use the built-in heuristic fallback (no AI key needed).
+    # OpenRouter / OpenAI API keys for AI script generation & LLM features.
+    # Defaults to OpenRouter's free router (`openrouter/free`) so any
+    # OpenRouter key works at $0 cost out of the box.
+    OPENROUTER_API_KEY: str = ""
+    OPENROUTER_MODEL: str = "openrouter/free"
+    OPENROUTER_BASE_URL: str = "https://openrouter.ai/api/v1"
     OPENAI_API_KEY: str = ""
-
 
     # Transcription. `auto` uses the hosted Whisper API when
     # TRANSCRIPTION_API_KEY is set and local Whisper otherwise, so the app

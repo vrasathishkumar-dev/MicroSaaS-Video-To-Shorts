@@ -72,7 +72,7 @@ export function ClipEditorPage() {
   const [framing, setFraming] = useState<ClipFraming | null>(null);
   const [captionEvents, setCaptionEvents] = useState<CaptionFrame[]>([]);
   const [framingMode, setFramingMode] = useState<FramingMode>('speaker_focus');
-  const [brollPlacement, setBrollPlacement] = useState<BrollPlacement>('bottom_right');
+  const [brollPlacement, setBrollPlacement] = useState<BrollPlacement>('bottom');
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [previewFailed, setPreviewFailed] = useState(false);
@@ -81,18 +81,13 @@ export function ClipEditorPage() {
   const [isPlaying, setIsPlaying] = useState(false);
   const [currentTime, setCurrentTime] = useState(0);
 
-  // Direct Header Export & Download state
   const [exportStatus, setExportStatus] = useState<'idle' | 'rendering' | 'ready' | 'failed'>('idle');
   const [isExporting, setIsExporting] = useState(false);
   const [isDownloading, setIsDownloading] = useState(false);
 
   const videoRef = useRef<HTMLVideoElement>(null);
-  // The lower half of a split screen. Same source file, muted, dragged
-  // along by the main element -- two <video> tags is far less machinery
-  // than compositing frames onto a canvas just to preview a layout.
   const secondPaneRef = useRef<HTMLVideoElement>(null);
 
-  // Load initial export status
   useEffect(() => {
     if (!Number.isFinite(clipId)) return;
     getExportStatus(clipId)
@@ -115,10 +110,9 @@ export function ClipEditorPage() {
     try {
       const data = await getClip(clipId);
       setClip(data);
-      // The studio opens on what this clip is actually set to render as.
       setFramingMode(data.framing_mode ?? 'speaker_focus');
       setCaptionPreset(data.caption_style ?? 'hormozi');
-      setBrollPlacement(data.broll_placement ?? 'bottom_right');
+      setBrollPlacement(data.broll_placement ?? 'bottom');
       if (data.video_project_id) {
         try {
           const segments = await getTranscript(data.video_project_id);
@@ -144,10 +138,6 @@ export function ClipEditorPage() {
     void loadClip();
   }, [loadClip]);
 
-  // Where the speaker is, so Speaker Focus crops to the person rather than
-  // to the middle of the frame. Re-probed when the trim moves, since the
-  // windows are analysed over the clip's own range. Non-blocking: the
-  // preview falls back to a centred zoom if the probe fails.
   const clipStart = clip?.start_time;
   const clipEnd = clip?.end_time;
   const clipStatus = clip?.status;
@@ -166,11 +156,6 @@ export function ClipEditorPage() {
     };
   }, [clipId, clipStart, clipEnd, clipStatus]);
 
-  // The captions the export will burn in. They come from the transcript
-  // unless the user wrote their own, which is why the preview can't build
-  // them from `caption_text` alone -- an untouched clip has none of that
-  // and still exports fully subtitled. Re-fetched when the trim moves or
-  // the style changes, since both change the timeline.
   useEffect(() => {
     if (!Number.isFinite(clipId) || clipStart === undefined) return;
     let current = true;
@@ -186,11 +171,6 @@ export function ClipEditorPage() {
     };
   }, [clipId, clipStart, clipEnd, clipStatus, captionPreset]);
 
-  /**
-   * Framing and caption style are render settings, not preview toggles:
-   * saving them is what makes the exported short match what the studio is
-   * showing. Applied locally first so the preview reacts immediately.
-   */
   const saveRenderChoice = async (payload: UpdateClipPayload) => {
     if (!clip) return;
     try {
@@ -331,17 +311,11 @@ export function ClipEditorPage() {
   const duration = Math.max(0, clip.end_time - clip.start_time);
   const virality = clipToViralityInsights(clip);
 
-  // Determine relative time for word-synced B-roll overlay
   const relativeTime = clip.status === 'ready' ? currentTime : Math.max(0, currentTime - clip.start_time);
   const activeBroll = brollAssets.find(
     (b) => relativeTime >= b.position_start && relativeTime <= b.position_end
   );
 
-  // Speaker Focus: crop the preview to the window the renderer will use,
-  // which follows the person and steps at the source's own cuts. When the
-  // backend found no confident subject the style is undefined and the
-  // preview falls back to a centred zoom -- the export falls back to
-  // blurred fill for the same reason.
   const speakerWindow =
     framing?.mode === 'speaker_focus'
       ? activeSpeakerWindow(framing.windows, relativeTime)
@@ -349,9 +323,6 @@ export function ClipEditorPage() {
   const speakerStyle =
     framingMode === 'speaker_focus' ? speakerFocusStyle(speakerWindow) : undefined;
 
-  // Where two people are in the conversation the export stacks them, so
-  // the preview does too: the main element takes the top pane and a muted
-  // twin takes the bottom one.
   const splitSection =
     framingMode === 'speaker_focus' && framing?.mode === 'speaker_focus'
       ? activeSplitSection(framing.split_sections, relativeTime)
@@ -367,7 +338,6 @@ export function ClipEditorPage() {
   const activeCaption = activeCaptionFrame(captionEvents, relativeTime);
   const captionStyle = CAPTION_PREVIEW_STYLES[captionPreset];
 
-  /** Keep the bottom pane on the same frame as the one being played. */
   const syncSecondPane = (time: number, playing: boolean) => {
     const pane = secondPaneRef.current;
     if (!pane) return;
@@ -488,7 +458,6 @@ export function ClipEditorPage() {
               </div>
             ) : (
               <>
-                {/* Optional Blurred Background Canvas for Dynamic Blur Mode */}
                 {framingMode === 'dynamic_blur' && (
                   <div className="absolute inset-0 overflow-hidden opacity-70 filter blur-xl scale-125 pointer-events-none">
                     <video
@@ -500,9 +469,6 @@ export function ClipEditorPage() {
                   </div>
                 )}
 
-                {/* Speaker panes: one, or two stacked while both talk.
-                    Both panes stay mounted and only change height, so
-                    cutting to a split screen never reloads the player. */}
                 <div
                   className={cn(
                     'absolute inset-0 flex flex-col',
@@ -511,7 +477,14 @@ export function ClipEditorPage() {
                 >
                   <div
                     className="relative overflow-hidden"
-                    style={{ height: splitSection ? '50%' : '100%' }}
+                    style={{
+                      height:
+                        brollPlacement === 'split' && activeBroll
+                          ? '50%'
+                          : splitSection
+                            ? '50%'
+                            : '100%',
+                    }}
                   >
                     <video
                       ref={videoRef}
@@ -552,11 +525,14 @@ export function ClipEditorPage() {
                     />
                   </div>
 
-                  {/* Loaded only for a clip that actually has a split, so
-                      a single-speaker preview streams the source once. */}
                   <div
                     className="relative overflow-hidden"
-                    style={{ height: splitSection ? '50%' : '0%' }}
+                    style={{
+                      height:
+                        splitSection && !(brollPlacement === 'split' && activeBroll)
+                          ? '50%'
+                          : '0%',
+                    }}
                   >
                     {hasSplitScreen && (
                       <video
@@ -572,9 +548,21 @@ export function ClipEditorPage() {
                   </div>
                 </div>
 
-                {/* Live Word-Synced B-Roll Overlay */}
+                {/* Live Word-Synced B-Roll Overlay positioned per brollPlacement */}
                 {activeBroll && (
-                  <div className="absolute top-4 right-4 z-20 w-32 aspect-video rounded-xl overflow-hidden border-2 border-primary shadow-2xl animate-in fade-in zoom-in-95 duration-200">
+                  <div
+                    className={cn(
+                      'absolute z-20 overflow-hidden shadow-2xl animate-in fade-in duration-200',
+                      brollPlacement === 'bottom' &&
+                        'inset-x-0 bottom-11 h-[36%] w-full border-t-2 border-primary',
+                      brollPlacement === 'split' &&
+                        'inset-x-0 bottom-0 h-1/2 w-full border-t-2 border-primary',
+                      brollPlacement === 'top' &&
+                        'inset-x-0 top-0 h-[36%] w-full border-b-2 border-primary',
+                      brollPlacement === 'bottom_right' &&
+                        'bottom-14 right-3 w-32 aspect-video rounded-xl border-2 border-primary',
+                    )}
+                  >
                     <video
                       src={resolveBrollAssetUrl(activeBroll) || activeBroll.asset_url}
                       muted
@@ -583,21 +571,24 @@ export function ClipEditorPage() {
                       playsInline
                       className="h-full w-full object-cover"
                     />
-                    <div className="absolute bottom-1 inset-x-1 flex items-center justify-between bg-black/80 backdrop-blur-sm rounded px-1.5 py-0.5 text-[9px] text-white">
-                      <span className="font-semibold truncate">✨ {activeBroll.keyword}</span>
+                    <div className="absolute top-1.5 right-2 flex items-center gap-1.5 bg-black/80 backdrop-blur-sm rounded-full px-2 py-0.5 text-[9px] text-white">
+                      <span className="font-semibold truncate max-w-[110px]">
+                        ✨ {activeBroll.keyword}
+                      </span>
                       <span className="text-primary font-mono text-[8px]">Word Sync</span>
                     </div>
                   </div>
                 )}
 
-                {/* Subtitles, as the export will burn them in: the
-                    renderer's own timeline, this clip's chosen preset, and
-                    the word it lights up. A `ready` clip already streams the
-                    rendered export, which has these burned into the pixels --
-                    drawing this too would double them up, so it's preview-only
-                    for clips that haven't been rendered yet. */}
                 {activeCaption && clip.status !== 'ready' && (
-                  <div className="absolute inset-x-4 bottom-14 z-20 pointer-events-none text-center">
+                  <div
+                    className={cn(
+                      'absolute inset-x-4 z-30 pointer-events-none text-center',
+                      activeBroll && (brollPlacement === 'bottom' || brollPlacement === 'split')
+                        ? 'top-[48%] -translate-y-1/2'
+                        : 'bottom-14',
+                    )}
+                  >
                     <span
                       className={cn(
                         'inline-block px-3 py-1.5 rounded-lg text-xs leading-tight',
@@ -620,7 +611,7 @@ export function ClipEditorPage() {
                 )}
 
                 {/* Player Controls Bar */}
-                <div className="absolute bottom-3 inset-x-4 z-20 flex items-center justify-between bg-black/60 backdrop-blur-md rounded-full px-3 py-1 text-white text-xs">
+                <div className="absolute bottom-3 inset-x-4 z-30 flex items-center justify-between bg-black/60 backdrop-blur-md rounded-full px-3 py-1 text-white text-xs">
                   <button
                     type="button"
                     onClick={togglePlay}
@@ -659,7 +650,6 @@ export function ClipEditorPage() {
 
         {/* Right: Studio Editing Tabs */}
         <div className="lg:col-span-7 space-y-5">
-          {/* Tab Navigation */}
           <div className="flex gap-2 rounded-xl bg-muted/60 p-1.5 border border-glass-border">
             {[
               { id: 'captions', label: 'Captions & Style', icon: Sparkles },
@@ -684,7 +674,6 @@ export function ClipEditorPage() {
             ))}
           </div>
 
-          {/* Tab 1: Captions & Style */}
           {activeTab === 'captions' && (
             <div className="space-y-5">
               <GlassCard className="space-y-4">
@@ -707,7 +696,6 @@ export function ClipEditorPage() {
             </div>
           )}
 
-          {/* Tab 2: Trim Timeline */}
           {activeTab === 'trim' && (
             <div className="space-y-5">
               <GlassCard>
@@ -733,7 +721,6 @@ export function ClipEditorPage() {
             </div>
           )}
 
-          {/* Tab 3: B-Roll Media */}
           {activeTab === 'broll' && (
             <BrollPanel
               clipId={clip.id}
@@ -742,7 +729,6 @@ export function ClipEditorPage() {
             />
           )}
 
-          {/* Tab 4: Export */}
           {activeTab === 'export' && (
             <div className="space-y-5">
               <ExportPanel clipId={clip.id} />

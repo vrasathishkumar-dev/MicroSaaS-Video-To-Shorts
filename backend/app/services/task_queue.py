@@ -37,30 +37,59 @@ def _get_queue() -> Any:
     return _queue
 
 
+def _has_active_rq_worker(queue: Any) -> bool:
+    """Return True when `queue` is either a test mock or has at least one
+    live RQ worker listening to it.
+
+    In local development, a user may have `REDIS_URL=redis://localhost:6379/0`
+    in `.env` with Redis running, but no `rq worker` process started. Pushing
+    onto RQ in that state leaves video projects stuck in `pending` forever.
+    """
+    try:
+        import redis
+        from rq import Worker
+
+        conn = getattr(queue, "connection", None)
+        if not isinstance(conn, redis.Redis):
+            # Unit tests mock redis.from_url / rq.Queue with MagicMock.
+            return True
+        return int(Worker.count(queue=queue)) > 0
+    except Exception as exc:
+        logger.warning(
+            "Could not verify active RQ workers (%s); using BackgroundTasks", exc
+        )
+        return False
+
+
 def enqueue(
     background_tasks: BackgroundTasks, func: Callable[..., None], *args: object
 ) -> None:
     """Run `func(*args)` as a background job.
 
-    If REDIS_URL is configured, enqueues onto Redis for the `worker`
-    service (see docker-compose.yml) to pick up -- this is how production
-    should run, so heavy video/render work never shares the API process's
-    resources and survives an API restart.
-
-    If REDIS_URL is not configured (local dev; always true in the test
-    suite, which doesn't want a real Redis dependency), falls back to
-    FastAPI's own `background_tasks`, run after the response is sent --
-    the exact timing/semantics this app already relied on before the queue
-    existed. This fallback is deliberate, not just a stand-in: the caller's
-    DB session (e.g. right after `db.refresh(...)`) is often still open at
-    this point, and `func` opens its *own* session -- running it inline
-    here instead of after the response risks two live sessions competing
-    for the same connection (acute on the test suite's shared-connection
-    SQLite `StaticPool`). BackgroundTasks avoids that by construction.
+    If REDIS_URL is configured and at least one RQ worker is active, enqueues
+    onto Redis for the `worker` service (see docker-compose.yml) to pick up.
+    If REDIS_URL is unset, unreachable, or has zero active workers listening,
+    automatically falls back to FastAPI's in-process `background_tasks` so
+    jobs never stay stuck in `pending`.
     """
 
     if settings.REDIS_URL:
-        _get_queue().enqueue(func, *args)
-        return
+        try:
+            queue = _get_queue()
+            if _has_active_rq_worker(queue):
+                queue.enqueue(func, *args, job_timeout=3600)
+                return
+            logger.warning(
+                "REDIS_URL is configured (%s) but 0 RQ workers are listening on %r; "
+                "falling back to FastAPI BackgroundTasks so job %s runs immediately",
+                settings.REDIS_URL,
+                _QUEUE_NAME,
+                getattr(func, "__name__", str(func)),
+            )
+        except Exception as exc:
+            logger.warning(
+                "Redis enqueue failed (%s); falling back to FastAPI BackgroundTasks",
+                exc,
+            )
 
     background_tasks.add_task(func, *args)

@@ -14,7 +14,7 @@ from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from app.exceptions import NotFoundError, ValidationAppError
-from app.models.clip import Clip, ClipStatus
+from app.models.clip import BrollPlacement, Clip, ClipStatus
 from app.models.transcript_segment import TranscriptSegment
 from app.models.video_project import (
     ClipLength,
@@ -784,6 +784,7 @@ def create_clips_from_highlights(
             # already looks the way they set it up.
             framing_mode=project.framing_mode,
             caption_style=project.caption_style,
+            broll_placement=BrollPlacement.bottom,
         )
         # Partial score (hook + completeness only) -- framing isn't
         # available until this clip renders (see video_render.py), so
