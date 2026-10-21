@@ -172,6 +172,7 @@ def _probe_video_duration(video_path: Path) -> float | None:
                 "default=noprint_wrappers=1:nokey=1",
                 str(video_path),
             ],
+            stdin=subprocess.DEVNULL,
             capture_output=True,
             text=True,
             check=True,

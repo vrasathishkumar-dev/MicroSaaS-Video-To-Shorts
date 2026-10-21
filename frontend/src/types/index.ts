@@ -205,7 +205,8 @@ export interface PaginatedResponse<T> {
 
 /** Standard error payload returned by the FastAPI backend. */
 export interface ApiError {
-  detail: string;
+  /** String for most errors; array of validation errors for 422 responses. */
+  detail: string | { msg: string }[];
 }
 
 /** Auth token pair returned by /auth/login and /auth/refresh. */

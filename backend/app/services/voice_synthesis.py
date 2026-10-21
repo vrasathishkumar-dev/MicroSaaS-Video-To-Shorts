@@ -158,7 +158,10 @@ def _synthesize_macos_say(
     """Call macOS /usr/bin/say and convert to mp3."""
     aiff_path = output_path.with_suffix(".aiff")
     subprocess.run(
-        ["/usr/bin/say", "-v", "Alex", "-o", str(aiff_path), text], check=True, timeout=60
+        ["/usr/bin/say", "-v", "Alex", "-o", str(aiff_path), text],
+        stdin=subprocess.DEVNULL,
+        check=True,
+        timeout=60,
     )
 
     # Convert to mp3

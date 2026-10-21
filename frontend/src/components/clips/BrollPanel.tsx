@@ -201,7 +201,7 @@ export function BrollPanel({ clipId, placement, onPlacementChange }: BrollPanelP
                   className="h-full w-full object-cover"
                 />
                 <div className="absolute top-1.5 left-1.5 rounded bg-black/60 px-1.5 py-0.5 text-[9px] font-mono text-white/90">
-                  {asset.position_start}s - {asset.position_end}s
+                  {asset.position_start.toFixed(1)}s - {asset.position_end.toFixed(1)}s
                 </div>
               </div>
               <div className="flex flex-1 flex-col gap-1.5 p-2">
