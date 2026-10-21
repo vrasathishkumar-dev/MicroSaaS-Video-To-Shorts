@@ -1,3 +1,4 @@
+import { getApiErrorMessage } from '@/lib/apiError';
 import { useState } from 'react';
 import type { FormEvent } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
@@ -59,11 +60,10 @@ export function LoginForm() {
       await login(email, password);
       navigate('/dashboard');
     } catch (err: unknown) {
-      const axiosError = err as { response?: { data?: { detail?: string; message?: string } } };
-      const message =
-        axiosError.response?.data?.detail ||
-        axiosError.response?.data?.message ||
-        'Invalid email or password. Please try again.';
+      const message = getApiErrorMessage(
+        err,
+        'Invalid email or password. Please try again.',
+      );
       setErrors({ form: message });
     } finally {
       setIsSubmitting(false);

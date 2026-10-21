@@ -1,4 +1,5 @@
-import type { AxiosError, AxiosProgressEvent } from 'axios';
+import { getApiErrorMessage } from '@/lib/apiError';
+import type { AxiosProgressEvent } from 'axios';
 import { useState, useRef, useEffect } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import {
@@ -16,7 +17,6 @@ import { GradientButton } from '@/components/ui/GradientButton';
 import { cn } from '@/lib/utils';
 import { submitVideo } from '@/services/videoService';
 import type {
-  ApiError,
   CaptionStylePreset,
   ClipLength,
   FramingMode,
@@ -125,10 +125,8 @@ export function VideoSubmitForm({ onSuccess }: VideoSubmitFormProps) {
       );
       onSuccess(video);
     } catch (err) {
-      const axiosError = err as AxiosError<ApiError>;
       setError(
-        axiosError.response?.data?.detail ??
-          'Something went wrong submitting your video. Please try again.',
+        getApiErrorMessage(err, 'Something went wrong submitting your video. Please try again.'),
       );
     } finally {
       setIsSubmitting(false);

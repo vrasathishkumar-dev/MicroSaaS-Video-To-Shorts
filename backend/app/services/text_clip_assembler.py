@@ -171,6 +171,7 @@ def _assemble(clip: Clip, db) -> Path:  # type: ignore[no-untyped-def]
                 str(base_video),
             ],
             check=True,
+            stdin=subprocess.DEVNULL,
             capture_output=True,
             timeout=120,
         )
@@ -228,7 +229,7 @@ def _normalize_scene(input_path: Path, output_path: Path, duration: float) -> No
         str(output_path),
     ]
 
-    res = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
+    res = subprocess.run(cmd, stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=120)
     if res.returncode != 0:
         logger.error("Scene normalization failed for %s: %s", input_path, res.stderr[-1000:])
         raise RuntimeError(f"Scene normalization failed: {res.stderr[-500:]}")
@@ -280,7 +281,7 @@ def _composite_video(
         str(output_path),
     ])
 
-    res = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
+    res = subprocess.run(cmd, stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=300)
     if res.returncode != 0:
         logger.error("Final compositing failed: %s", res.stderr[-2000:])
         raise RuntimeError(f"ffmpeg composition failed: {res.stderr[-500:]}")
@@ -371,6 +372,7 @@ def _generate_procedural_scenes(keywords: list[str], tmp_dir: str) -> list[Path]
                 str(scene_path),
             ],
             check=True,
+            stdin=subprocess.DEVNULL,
             capture_output=True,
             timeout=30,
         )
@@ -408,6 +410,7 @@ def _extract_thumbnail(video_path: Path, duration: float) -> Path | None:
                 str(thumbnail_path),
             ],
             check=True,
+            stdin=subprocess.DEVNULL,
             capture_output=True,
             timeout=15,
         )

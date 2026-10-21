@@ -1,3 +1,4 @@
+import { getApiErrorMessage } from '@/lib/apiError';
 import { useState } from 'react';
 import type { FormEvent } from 'react';
 import { useNavigate } from 'react-router-dom';
@@ -74,11 +75,10 @@ export function RegisterForm() {
       await register(email, password, fullName);
       navigate('/dashboard');
     } catch (err: unknown) {
-      const axiosError = err as { response?: { data?: { detail?: string; message?: string } } };
-      const message =
-        axiosError.response?.data?.detail ||
-        axiosError.response?.data?.message ||
-        'Could not create your account. Please check your details and try again.';
+      const message = getApiErrorMessage(
+        err,
+        'Could not create your account. Please check your details and try again.',
+      );
       setErrors({ form: message });
     } finally {
       setIsSubmitting(false);

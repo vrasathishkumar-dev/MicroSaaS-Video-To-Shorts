@@ -531,6 +531,7 @@ def _analyse(source_path: str, start_time: float, duration: float):  # type: ign
             "rawvideo",
             "-",
         ],
+        stdin=subprocess.DEVNULL,
         capture_output=True,
         check=True,
         timeout=_SAMPLE_TIMEOUT_SECONDS,

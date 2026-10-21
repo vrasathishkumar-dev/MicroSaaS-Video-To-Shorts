@@ -39,6 +39,7 @@ def get_audio_duration(file_path: Path) -> float:
                 "-of", "default=noprint_wrappers=1:nokey=1",
                 str(file_path),
             ],
+            stdin=subprocess.DEVNULL,
             capture_output=True,
             text=True,
             check=True,
@@ -168,6 +169,7 @@ def _synthesize_macos_say(
             str(output_path),
         ],
         check=True,
+        stdin=subprocess.DEVNULL,
         capture_output=True,
         timeout=30,
     )
@@ -192,6 +194,7 @@ def _create_silent_fallback(
             str(output_path),
         ],
         check=True,
+        stdin=subprocess.DEVNULL,
         capture_output=True,
     )
     events = _estimate_sentence_timings(text, duration)

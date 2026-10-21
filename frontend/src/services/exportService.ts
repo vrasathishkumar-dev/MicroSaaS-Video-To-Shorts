@@ -1,3 +1,4 @@
+import { formatDetail } from '@/lib/apiError';
 import api, { API_URL, getAccessToken } from '@/services/api';
 
 /** Shape returned by both the export-trigger and export-status endpoints. */
@@ -77,7 +78,7 @@ export async function downloadClip(clipId: number): Promise<void> {
       let errorMsg = 'Failed to download clip';
       try {
         const parsed = JSON.parse(text);
-        errorMsg = parsed.detail || errorMsg;
+        errorMsg = formatDetail(parsed.detail, errorMsg);
       } catch {
         // use default
       }
@@ -102,7 +103,7 @@ export async function downloadClip(clipId: number): Promise<void> {
           const text = await axiosErr.response.data.text();
           const parsed = JSON.parse(text);
           if (parsed.detail) {
-            throw new Error(parsed.detail);
+            throw new Error(formatDetail(parsed.detail, 'Failed to download clip'));
           }
         } catch (parseErr) {
           if (parseErr instanceof Error && parseErr.message !== 'Failed to download clip') {
