@@ -29,8 +29,18 @@ import type {
   VideoSourceType,
 } from '@/types';
 
+export interface ShortCustomizationSettings {
+  clipLength: ClipLength;
+  subtitleStyle: CaptionStylePreset;
+  framingMode: FramingMode;
+  autoBroll: boolean;
+  brollPlacement: BrollPlacement;
+  autoProduce: boolean;
+}
+
 export interface VideoSubmitFormProps {
   onSuccess: (video: VideoProject) => void;
+  onCustomizationChange?: (settings: ShortCustomizationSettings) => void;
 }
 
 const BROLL_PLACEMENT_OPTIONS: Array<{
@@ -74,7 +84,10 @@ const PLATFORMS = [
   { name: 'Vimeo', icon: Film, example: 'https://vimeo.com/...' },
 ];
 
-export function VideoSubmitForm({ onSuccess }: VideoSubmitFormProps) {
+export function VideoSubmitForm({
+  onSuccess,
+  onCustomizationChange,
+}: VideoSubmitFormProps) {
   const [searchParams] = useSearchParams();
   const initialUrl = searchParams.get('url')?.trim() ?? '';
 
@@ -95,6 +108,25 @@ export function VideoSubmitForm({ onSuccess }: VideoSubmitFormProps) {
   const [autoProduce, setAutoProduce] = useState(true);
 
   const fileInputRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    onCustomizationChange?.({
+      clipLength,
+      subtitleStyle,
+      framingMode,
+      autoBroll,
+      brollPlacement,
+      autoProduce,
+    });
+  }, [
+    clipLength,
+    subtitleStyle,
+    framingMode,
+    autoBroll,
+    brollPlacement,
+    autoProduce,
+    onCustomizationChange,
+  ]);
 
   useEffect(() => {
     const paramUrl = searchParams.get('url')?.trim();
