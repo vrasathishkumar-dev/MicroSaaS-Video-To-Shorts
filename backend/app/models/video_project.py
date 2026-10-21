@@ -84,6 +84,7 @@ class VideoProject(Base, TimestampMixin):
         nullable=False,
     )
     duration_seconds: Mapped[float | None] = mapped_column(Float, nullable=True)
+    virality_score: Mapped[float | None] = mapped_column(Float, nullable=True)
     error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     # Self-declared copyright basis for the source material. Nullable: pre-existing
@@ -149,6 +150,18 @@ class VideoProject(Base, TimestampMixin):
         cascade="all, delete-orphan",
         passive_deletes=True,
     )
+
+    @property
+    def has_viral_content(self) -> bool | None:
+        if self.virality_score is None:
+            return None
+        return self.virality_score >= 50.0
+
+    @property
+    def viral_clips_count(self) -> int:
+        if not self.clips:
+            return 0
+        return sum(1 for c in self.clips if (c.virality_score or 0.0) >= 50.0)
 
     def __repr__(self) -> str:
         return f"<VideoProject id={self.id} title={self.title!r} status={self.status}>"

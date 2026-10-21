@@ -1,4 +1,13 @@
-import { CheckCircle2, Download, FileText, Loader2, Sparkles, Wand2 } from 'lucide-react';
+import {
+  CheckCircle2,
+  Download,
+  FileText,
+  Flame,
+  Loader2,
+  ShieldAlert,
+  Sparkles,
+  Wand2,
+} from 'lucide-react';
 import { useEffect, useState } from 'react';
 import { motion } from 'framer-motion';
 import { cn } from '@/lib/utils';
@@ -7,13 +16,15 @@ import type { VideoProjectStatus } from '@/types';
 export interface ProcessingProgressProps {
   status: VideoProjectStatus;
   isGeneratingClips?: boolean;
+  viralityScore?: number | null;
+  hasViralContent?: boolean | null;
   className?: string;
 }
 
 interface Step {
   id: string;
   title: string;
-  description: string;
+  description: (viralityScore?: number | null) => string;
   icon: typeof Download;
   isComplete: (status: VideoProjectStatus) => boolean;
   isActive: (status: VideoProjectStatus) => boolean;
@@ -23,7 +34,7 @@ const STEPS: Step[] = [
   {
     id: 'download',
     title: 'Source Fetch',
-    description: 'Downloading & preparing source video stream',
+    description: () => 'Downloading & preparing source video stream',
     icon: Download,
     isComplete: (s) => ['transcribing', 'analyzing', 'ready'].includes(s),
     isActive: (s) => s === 'pending' || s === 'downloading',
@@ -31,23 +42,33 @@ const STEPS: Step[] = [
   {
     id: 'transcribe',
     title: 'Whisper Transcription',
-    description: 'Converting speech into timestamped transcript',
+    description: () => 'Converting speech into timestamped transcript',
     icon: FileText,
     isComplete: (s) => ['analyzing', 'ready'].includes(s),
     isActive: (s) => s === 'transcribing',
   },
   {
     id: 'analyze',
-    title: 'Highlight Detection',
-    description: 'AI scoring hooks, keywords & viral moments',
+    title: 'Viral Content Scoring',
+    description: (score) =>
+      score !== null && score !== undefined
+        ? `Peak viral score: ${Math.round(score)}/100 detected`
+        : 'AI scoring hooks, keywords & viral moments',
     icon: Sparkles,
     isComplete: (s) => s === 'ready',
     isActive: (s) => s === 'analyzing',
   },
   {
     id: 'ready',
-    title: 'Ready for Splitting',
-    description: 'Timeline analyzed and ready to generate vertical clips',
+    title: 'Viral Shot Verification',
+    description: (score) => {
+      if (score === null || score === undefined) {
+        return 'Verifying viral shots (>=50 score) & splitting clips';
+      }
+      return score >= 50
+        ? `Viral content verified (${Math.round(score)}/100) — ready for shorts`
+        : `Low virality (${Math.round(score)}/100) — auto-render skipped`;
+    },
     icon: Wand2,
     isComplete: (s) => s === 'ready',
     isActive: (s) => s === 'ready',
@@ -67,11 +88,14 @@ const STATUS_PROGRESS: Record<VideoProjectStatus, number> = {
 export function ProcessingProgress({
   status,
   isGeneratingClips = false,
+  viralityScore,
+  hasViralContent,
   className,
 }: ProcessingProgressProps) {
   const [elapsedSeconds, setElapsedSeconds] = useState(0);
 
   const isProcessing = status !== 'ready' && status !== 'failed';
+  const isViral = hasViralContent ?? (viralityScore !== null && viralityScore !== undefined ? viralityScore >= 50 : false);
 
   useEffect(() => {
     if (!isProcessing && !isGeneratingClips) {
@@ -109,7 +133,7 @@ export function ProcessingProgress({
     >
       {/* Header Info */}
       <div className="mb-4 flex flex-wrap items-center justify-between gap-2">
-        <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center gap-2.5">
           {isProcessing || isGeneratingClips ? (
             <Loader2 className="h-5 w-5 animate-spin text-primary" />
           ) : (
@@ -122,6 +146,27 @@ export function ProcessingProgress({
                 ? 'Processing Video Pipeline...'
                 : 'Pipeline Complete'}
           </span>
+
+          {viralityScore !== null && viralityScore !== undefined && status === 'ready' && (
+            <span
+              className={cn(
+                'inline-flex items-center gap-1.5 rounded-full px-2.5 py-0.5 text-xs font-bold border transition-colors',
+                isViral
+                  ? 'border-emerald-500/40 bg-emerald-500/15 text-emerald-400'
+                  : 'border-amber-500/40 bg-amber-500/15 text-amber-400',
+              )}
+            >
+              {isViral ? (
+                <Flame className="h-3.5 w-3.5 fill-emerald-500/30" />
+              ) : (
+                <ShieldAlert className="h-3.5 w-3.5" />
+              )}
+              Viral Content Score: {Math.round(viralityScore)}/100
+              <span className="text-[10px] font-medium opacity-85">
+                • {isViral ? 'Verified Viral Shots' : 'Low Viral Content'}
+              </span>
+            </span>
+          )}
         </div>
 
         <div className="flex items-center gap-3 text-xs font-medium text-muted-foreground">
@@ -204,7 +249,7 @@ export function ProcessingProgress({
                 {step.title}
               </h4>
               <p className="mt-0.5 text-[11px] text-muted-foreground leading-snug">
-                {step.description}
+                {step.description(viralityScore)}
               </p>
             </div>
           );

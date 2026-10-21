@@ -793,6 +793,11 @@ def create_clips_from_highlights(
         db.add(clip)
         clips.append(clip)
 
+    if clips:
+        clip_scores = [c.virality_score for c in clips if c.virality_score is not None]
+        if clip_scores:
+            project.virality_score = round(max(clip_scores), 1)
+
     db.commit()
     for clip in clips:
         db.refresh(clip)

@@ -225,6 +225,8 @@ export function VideoDetailPage() {
       <ProcessingProgress
         status={video.status}
         isGeneratingClips={isGenerating || isProducing || anyClipRendering}
+        viralityScore={video.virality_score}
+        hasViralContent={video.has_viral_content}
       />
 
       {/* Project Overview Card */}
@@ -237,7 +239,7 @@ export function VideoDetailPage() {
           <StatusBadge status={video.status} />
         </div>
 
-        <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 py-3 px-4 rounded-xl bg-background/50 border border-glass-border text-xs">
+        <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3 py-3 px-4 rounded-xl bg-background/50 border border-glass-border text-xs">
           <div>
             <span className="text-muted-foreground block text-[11px]">Source</span>
             <span className="font-semibold uppercase text-foreground">{video.source_type}</span>
@@ -249,6 +251,27 @@ export function VideoDetailPage() {
             </span>
           </div>
           <div>
+            <span className="text-muted-foreground block text-[11px]">Viral Content Score</span>
+            {video.virality_score !== null && video.virality_score !== undefined ? (
+              <span
+                className={cn(
+                  'font-bold inline-flex items-center gap-1',
+                  video.virality_score >= 50 ? 'text-emerald-400' : 'text-amber-400',
+                )}
+              >
+                <Flame className="h-3.5 w-3.5 shrink-0 fill-current" />
+                {Math.round(video.virality_score)}/100
+                <span className="text-[10px] font-normal opacity-85">
+                  {video.virality_score >= 50 ? '(Verified)' : '(<50 Low)'}
+                </span>
+              </span>
+            ) : (
+              <span className="font-semibold text-muted-foreground">
+                {video.status === 'ready' ? 'Unscored' : 'Analyzing'}
+              </span>
+            )}
+          </div>
+          <div>
             <span className="text-muted-foreground block text-[11px]">AI Highlights</span>
             <span className="font-semibold text-emerald-400">
               {highlightsCount > 0 ? `${highlightsCount} detected` : 'Analyzing'}
@@ -258,11 +281,49 @@ export function VideoDetailPage() {
             <span className="text-muted-foreground block text-[11px]">Shorts Output</span>
             <span className="font-semibold text-primary">
               {clips.length > 0
-                ? `${clips.length} Clips`
+                ? `${clips.filter((c) => (c.virality_score || 0) >= 50).length} Viral / ${clips.length} Total`
                 : `~${getExpectedShortsCount(video.duration_seconds)}`}
             </span>
           </div>
         </div>
+
+        {/* Viral Content Verification Status Banner */}
+        {video.status === 'ready' && video.virality_score !== null && video.virality_score !== undefined && (
+          video.virality_score >= 50 ? (
+            <div className="mt-4 flex items-start gap-2.5 rounded-xl border border-emerald-500/30 bg-emerald-500/10 p-3.5 text-xs text-emerald-300">
+              <Flame className="h-4 w-4 shrink-0 text-emerald-400 mt-0.5" />
+              <div>
+                <span className="font-bold text-emerald-200">
+                  Viral Content Verified ({Math.round(video.virality_score)}/100):
+                </span>{' '}
+                This video contains verified viral content shots that crossed the 50-point virality threshold.
+                {clips.length > 0 && (
+                  <span>
+                    {' '}
+                    <strong>{clips.filter((c) => (c.virality_score || 0) >= 50).length}</strong> of{' '}
+                    <strong>{clips.length}</strong> shots qualified for automatic production.
+                    {clips.some((c) => (c.virality_score || 0) < 50) && (
+                      <span className="text-emerald-400/80">
+                        {' '}
+                        ({clips.filter((c) => (c.virality_score || 0) < 50).length} sub-threshold clip(s) kept in draft to prevent wasted render credits).
+                      </span>
+                    )}
+                  </span>
+                )}
+              </div>
+            </div>
+          ) : (
+            <div className="mt-4 flex items-start gap-2.5 rounded-xl border border-amber-500/30 bg-amber-500/10 p-3.5 text-xs text-amber-300">
+              <AlertCircle className="h-4 w-4 shrink-0 text-amber-400 mt-0.5" />
+              <div>
+                <span className="font-bold text-amber-200">
+                  Low Viral Content Score ({Math.round(video.virality_score)}/100):
+                </span>{' '}
+                All segments scored below the 50-point viral threshold. Automatic video rendering was skipped to save your credits. You can still inspect draft segments and render manually if desired.
+              </div>
+            </div>
+          )
+        )}
 
         {video.status === 'failed' && video.error_message && (
           <div className="mt-4 flex items-center gap-2 rounded-xl bg-destructive/15 p-3 text-xs text-destructive">
@@ -349,14 +410,20 @@ export function VideoDetailPage() {
       {/* Generated Clips Grid Section */}
       {clips.length > 0 && (
         <div className="space-y-4">
-          <div className="flex items-center justify-between">
+          <div className="flex flex-wrap items-center justify-between gap-2">
             <div className="flex items-center gap-2">
               <Film className="h-5 w-5 text-primary" />
               <h2 className="text-lg font-bold text-foreground">
                 Generated Shorts ({clips.length})
               </h2>
             </div>
-            <span className="text-xs text-muted-foreground">Click any short to edit in Studio</span>
+            <div className="flex items-center gap-3 text-xs text-muted-foreground">
+              <span className="inline-flex items-center gap-1 font-semibold text-emerald-400">
+                <Flame className="h-3.5 w-3.5 fill-emerald-500/20" />
+                {clips.filter((c) => (c.virality_score || 0) >= 50).length} Viral Verified
+              </span>
+              <span>• Click any short to edit in Studio</span>
+            </div>
           </div>
 
           <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">

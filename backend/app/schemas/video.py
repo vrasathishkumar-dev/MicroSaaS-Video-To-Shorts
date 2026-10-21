@@ -71,6 +71,9 @@ class VideoProjectResponse(BaseModel):
     caption_style: ClipCaptionStyle
     auto_broll: bool
     broll_placement: BrollPlacement = BrollPlacement.bottom
+    virality_score: float | None = None
+    has_viral_content: bool | None = None
+    viral_clips_count: int | None = None
     created_at: datetime
     updated_at: datetime
 

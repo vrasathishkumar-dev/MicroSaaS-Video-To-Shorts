@@ -231,6 +231,9 @@ async def process_video_project(project_id: int, auto_produce: bool = False) -> 
             db.commit()
 
             detect_highlights(segments)
+            if segments:
+                max_highlight = max((seg.highlight_score or 0.0) for seg in segments)
+                project.virality_score = round(max_highlight * 100.0, 1)
             db.commit()
 
             project.status = VideoProjectStatus.ready
@@ -516,6 +519,10 @@ async def produce_video_project(
         clips = clip_service.create_clips_from_highlights(
             db, video_project_id=project.id, user_id=user.id
         )
+
+    clip_scores = [c.virality_score for c in clips if c.virality_score is not None]
+    if clip_scores:
+        project.virality_score = round(max(clip_scores), 1)
 
     viral_clips = [
         c for c in clips if (c.virality_score or 0.0) >= _REVIEW_THRESHOLD

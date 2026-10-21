@@ -50,6 +50,9 @@ export interface VideoProject {
   caption_style: CaptionStylePreset;
   auto_broll: boolean;
   broll_placement?: BrollPlacement;
+  virality_score?: number | null;
+  has_viral_content?: boolean | null;
+  viral_clips_count?: number | null;
   created_at: string;
   updated_at: string;
 }
