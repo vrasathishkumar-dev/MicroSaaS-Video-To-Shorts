@@ -732,7 +732,7 @@ export function ClipEditorPage() {
 
           {activeTab === 'export' && (
             <div className="space-y-5">
-              <ExportPanel clipId={clip.id} />
+              <ExportPanel clipId={clip.id} viralityScore={clip.virality_score} />
 
               <GlassCard>
                 <ViralityScoreBadge insights={virality} showDetails size="lg" />

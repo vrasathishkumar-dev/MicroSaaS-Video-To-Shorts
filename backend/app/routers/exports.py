@@ -17,7 +17,7 @@ import logging
 import re
 from pathlib import Path
 
-from fastapi import APIRouter, BackgroundTasks, Depends
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, status
 from fastapi.responses import FileResponse
 from sqlalchemy.orm import Session
 
@@ -38,6 +38,7 @@ from app.schemas.export import (
 from app.services import task_queue
 from app.services.broll_sourcing import auto_source_broll
 from app.services.caption_render import CAPTION_STYLES, caption_frames
+from app.services.clip_service import _REVIEW_THRESHOLD, score_clip_partial
 from app.services.reframe import SpeakerWindow, compute_speaker_framing
 from app.services.storage import get_file_path
 from app.services.video_render import _caption_events, render_clip
@@ -106,19 +107,53 @@ async def _ensure_broll(db: Session, clip: Clip) -> None:
 async def export_clip(
     clip_id: int,
     background_tasks: BackgroundTasks,
+    force: bool = Query(
+        False,
+        description=(
+            "Set true to bypass the viral score gate and render anyway "
+            "when a clip scores below the virality threshold (50.0)."
+        ),
+    ),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ) -> ExportStatusResponse:
     """Kick off rendering a clip into an exportable, downloadable MP4.
 
-    Marks the clip `rendering` and schedules the actual ffmpeg work via
-    app.services.task_queue (a real Redis-backed job in production, or
-    BackgroundTasks locally) so this request returns immediately -- per
-    CLAUDE.md, long video processing must never run synchronously in a
-    request handler. Poll GET /clips/{id}/export/status for completion.
+    Pipeline gate: checks that the clip contains verified viral content
+    (virality_score >= 50.0). If the score is below the threshold and
+    `force` is false, returns 409 Conflict without rendering so weak
+    clips are not created into videos.
     """
 
     clip = _get_owned_clip(db, clip_id, current_user.id)
+
+    # Score any clip that slipped through without one (legacy/pre-migration rows)
+    if clip.virality_score is None:
+        segments = clip.video_project.transcript_segments if clip.video_project else []
+        score_clip_partial(clip, segments)
+        db.commit()
+        db.refresh(clip)
+
+    below_threshold = (
+        clip.virality_score is not None
+        and clip.virality_score < _REVIEW_THRESHOLD
+    )
+
+    if below_threshold and not force:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={
+                "code": "score_below_threshold",
+                "virality_score": clip.virality_score,
+                "threshold": _REVIEW_THRESHOLD,
+                "message": (
+                    f"This clip scored {clip.virality_score:.0f}/100, which is below "
+                    f"the {_REVIEW_THRESHOLD:.0f}-point virality threshold. "
+                    "Video creation is gated because the clip lacks verified viral content. "
+                    "Pass ?force=true to render anyway."
+                ),
+            },
+        )
 
     await _ensure_broll(db, clip)
 
@@ -129,7 +164,11 @@ async def export_clip(
     task_queue.enqueue(background_tasks, render_clip, clip.id)
 
     return ExportStatusResponse(
-        clip_id=clip.id, status=clip.status, video_file_path=clip.video_file_path
+        clip_id=clip.id,
+        status=clip.status,
+        video_file_path=clip.video_file_path,
+        virality_score=clip.virality_score,
+        below_threshold=below_threshold,
     )
 
 
@@ -143,7 +182,14 @@ async def get_export_status(
 
     clip = _get_owned_clip(db, clip_id, current_user.id)
     return ExportStatusResponse(
-        clip_id=clip.id, status=clip.status, video_file_path=clip.video_file_path
+        clip_id=clip.id,
+        status=clip.status,
+        video_file_path=clip.video_file_path,
+        virality_score=clip.virality_score,
+        below_threshold=(
+            clip.virality_score is not None
+            and clip.virality_score < _REVIEW_THRESHOLD
+        ),
     )
 
 

@@ -20,6 +20,8 @@ class ExportStatusResponse(BaseModel):
     clip_id: int
     status: ClipStatus
     video_file_path: str | None = None
+    virality_score: float | None = None
+    below_threshold: bool = False
 
     model_config = ConfigDict(from_attributes=True)
 

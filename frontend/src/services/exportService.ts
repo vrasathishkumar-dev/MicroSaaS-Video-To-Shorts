@@ -6,6 +6,28 @@ export interface ExportStatusResponse {
   clip_id: number;
   status: 'idle' | 'rendering' | 'ready' | 'failed';
   video_file_path: string | null;
+  virality_score?: number | null;
+  below_threshold?: boolean;
+}
+
+export interface ScoreGateErrorDetail {
+  code: string;
+  virality_score: number;
+  threshold: number;
+  message: string;
+}
+
+export function isScoreGateError(
+  err: unknown,
+): err is { response: { data: { detail: ScoreGateErrorDetail } } } {
+  if (!err || typeof err !== 'object' || !('response' in err)) return false;
+  const resp = (err as { response?: { data?: { detail?: unknown } } }).response;
+  const detail = resp?.data?.detail;
+  return (
+    typeof detail === 'object' &&
+    detail !== null &&
+    (detail as Record<string, unknown>).code === 'score_below_threshold'
+  );
 }
 
 /**
@@ -13,9 +35,11 @@ export interface ExportStatusResponse {
  */
 export async function triggerExport(
   clipId: number,
+  force: boolean = false,
 ): Promise<ExportStatusResponse> {
+  const query = force ? '?force=true' : '';
   const { data } = await api.post<ExportStatusResponse>(
-    `/clips/${clipId}/export`,
+    `/clips/${clipId}/export${query}`,
   );
   return data;
 }

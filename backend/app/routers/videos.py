@@ -44,6 +44,7 @@ from app.schemas.video import (
 )
 from app.services import clip_service, storage, task_queue
 from app.services.broll_sourcing import auto_source_broll
+from app.services.clip_service import _REVIEW_THRESHOLD
 from app.services.highlight_detection import detect_highlights
 from app.services.transcription import TranscriptionError, transcribe_video
 from app.services.video_render import render_clip
@@ -102,7 +103,7 @@ async def _call_transcribe_video(file_path: str, source_url: str | None) -> list
 
 
 async def _produce_clips_for_project(db: Session, project: VideoProject) -> None:
-    """Generate clips from highlights, auto-source B-roll, and render 9:16 exports."""
+    """Generate clips from highlights, check for viral content, auto-source B-roll, and render 9:16 exports."""
 
     clips = clip_service.create_clips_from_highlights(
         db, video_project_id=project.id, user_id=project.user_id
@@ -110,8 +111,30 @@ async def _produce_clips_for_project(db: Session, project: VideoProject) -> None
     if not clips:
         return
 
+    # Viral verification pipeline: verify that clips contain viral content (score >= _REVIEW_THRESHOLD)
+    viral_clips = [
+        c for c in clips if (c.virality_score or 0.0) >= _REVIEW_THRESHOLD
+    ]
+
+    if not viral_clips:
+        logger.info(
+            "Viral verification pipeline: No viral content found in video project %s "
+            "(all %d clips scored below virality threshold %.1f). Skipping video creation.",
+            project.id,
+            len(clips),
+            _REVIEW_THRESHOLD,
+        )
+        return
+
+    logger.info(
+        "Viral verification pipeline passed: %d of %d clips have verified viral content (>= %.1f score). Proceeding to create videos...",
+        len(viral_clips),
+        len(clips),
+        _REVIEW_THRESHOLD,
+    )
+
     ordered_clips = sorted(
-        clips, key=lambda c: (c.virality_score or 0.0), reverse=True
+        viral_clips, key=lambda c: (c.virality_score or 0.0), reverse=True
     )
 
     source_exists = bool(
@@ -263,7 +286,19 @@ def run_produce_project_clips(project_id: int) -> None:
                 .order_by(Clip.order_index.asc())
                 .all()
             )
-            for clip in clips:
+            viral_clips = [
+                c for c in clips if (c.virality_score or 0.0) >= _REVIEW_THRESHOLD
+            ]
+            if not viral_clips:
+                logger.info(
+                    "run_produce_project_clips: No viral content found for project %s (all %d clips below %.1f). Skipping video creation.",
+                    project.id,
+                    len(clips),
+                    _REVIEW_THRESHOLD,
+                )
+                return
+
+            for clip in viral_clips:
                 if clip.status == ClipStatus.ready and clip.video_file_path:
                     continue
                 if project.auto_broll:
@@ -482,7 +517,15 @@ async def produce_video_project(
             db, video_project_id=project.id, user_id=user.id
         )
 
-    for clip in clips:
+    viral_clips = [
+        c for c in clips if (c.virality_score or 0.0) >= _REVIEW_THRESHOLD
+    ]
+    if not viral_clips:
+        raise ValidationAppError(
+            f"No viral content detected in this video (all {len(clips)} clips scored below the {_REVIEW_THRESHOLD:.0f}-point virality threshold). Cannot create videos."
+        )
+
+    for clip in viral_clips:
         if clip.status != ClipStatus.ready or not clip.video_file_path:
             clip.status = ClipStatus.rendering
     db.commit()

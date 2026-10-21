@@ -482,3 +482,106 @@ class TestReprocess:
             f"/api/v1/videos/{other.id}/process", headers=auth_headers
         )
         assert response.status_code == 404
+
+
+class TestViralVerificationPipeline:
+    def test_produce_clips_skips_when_no_viral_content(
+        self, db_session: Session, test_user: User
+    ) -> None:
+        """If all clips score below virality threshold (50.0), no videos are rendered."""
+        from app.models.clip import Clip, ClipStatus
+        from app.routers.videos import _produce_clips_for_project
+
+        project = VideoProject(
+            user_id=test_user.id,
+            title="Non-viral Project",
+            source_type=SourceType.upload,
+            status=VideoProjectStatus.ready,
+            source_file_path="videos/dummy.mp4",
+        )
+        db_session.add(project)
+        db_session.commit()
+
+        # Mock create_clips_from_highlights returning sub-50 clips
+        sub_clip = Clip(
+            video_project_id=project.id,
+            user_id=test_user.id,
+            title="Boring clip",
+            start_time=0.0,
+            end_time=10.0,
+            order_index=0,
+            status=ClipStatus.draft,
+            virality_score=35.0,
+        )
+        db_session.add(sub_clip)
+        db_session.commit()
+
+        import asyncio
+        with (
+            patch("app.services.clip_service.create_clips_from_highlights", return_value=[sub_clip]),
+            patch("app.routers.videos.render_clip") as mock_render,
+        ):
+            asyncio.run(_produce_clips_for_project(db_session, project))
+
+        assert not mock_render.called
+        db_session.refresh(sub_clip)
+        assert sub_clip.status == ClipStatus.draft
+
+    def test_produce_clips_renders_only_viral_clips(
+        self, db_session: Session, test_user: User
+    ) -> None:
+        """Only clips with virality_score >= 50.0 are rendered into videos."""
+        from app.models.clip import Clip, ClipStatus
+        from app.routers.videos import _produce_clips_for_project
+
+        project = VideoProject(
+            user_id=test_user.id,
+            title="Viral Project",
+            source_type=SourceType.upload,
+            status=VideoProjectStatus.ready,
+            source_file_path="videos/dummy.mp4",
+        )
+        db_session.add(project)
+        db_session.commit()
+
+        weak_clip = Clip(
+            video_project_id=project.id,
+            user_id=test_user.id,
+            title="Weak clip",
+            start_time=0.0,
+            end_time=10.0,
+            order_index=0,
+            status=ClipStatus.draft,
+            virality_score=40.0,
+        )
+        viral_clip = Clip(
+            video_project_id=project.id,
+            user_id=test_user.id,
+            title="Viral clip",
+            start_time=10.0,
+            end_time=25.0,
+            order_index=1,
+            status=ClipStatus.draft,
+            virality_score=85.0,
+        )
+        db_session.add_all([weak_clip, viral_clip])
+        db_session.commit()
+
+        import asyncio
+        with (
+            patch("app.services.clip_service.create_clips_from_highlights", return_value=[weak_clip, viral_clip]),
+            patch("app.routers.videos.storage.get_file_path") as mock_fp,
+            patch("app.routers.videos.render_clip") as mock_render,
+        ):
+            mock_fp.return_value.is_file.return_value = True
+            asyncio.run(_produce_clips_for_project(db_session, project))
+
+        # Only the viral clip was sent to render_clip
+        assert mock_render.called
+        assert mock_render.call_count == 1
+        assert mock_render.call_args[0][0] == viral_clip.id
+
+        db_session.refresh(weak_clip)
+        db_session.refresh(viral_clip)
+        assert weak_clip.status == ClipStatus.draft
+        assert viral_clip.status == ClipStatus.rendering

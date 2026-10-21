@@ -40,6 +40,7 @@ def _make_clip(db_session: Session, user: User, **overrides) -> Clip:
         end_time=10.0,
         order_index=0,
         status=ClipStatus.draft,
+        virality_score=75.0,
     )
     defaults.update(overrides)
     clip = Clip(**defaults)
@@ -133,6 +134,41 @@ class TestExportTrigger:
     ) -> None:
         response = client.post("/api/v1/clips/999999/export", headers=auth_headers)
         assert response.status_code == 404
+
+    def test_export_blocked_below_virality_threshold_409(
+        self, client: TestClient, auth_headers: dict[str, str], db_session: Session, test_user
+    ) -> None:
+        """Clips with virality_score < 50 cannot be exported without force=True."""
+        clip = _make_clip(db_session, test_user, virality_score=38.5)
+
+        with patch("app.routers.exports.render_clip") as mock_render:
+            response = client.post(f"/api/v1/clips/{clip.id}/export", headers=auth_headers)
+
+        assert response.status_code == 409
+        body = response.json()
+        assert body["detail"]["code"] == "score_below_threshold"
+        assert body["detail"]["virality_score"] == 38.5
+        assert not mock_render.called
+
+        # Clip remains in draft status
+        db_session.refresh(clip)
+        assert clip.status == ClipStatus.draft
+
+    def test_export_allowed_below_threshold_with_force_true(
+        self, client: TestClient, auth_headers: dict[str, str], db_session: Session, test_user
+    ) -> None:
+        """Passing ?force=true allows rendering low-scoring clips when user explicitly confirms."""
+        clip = _make_clip(db_session, test_user, virality_score=38.5)
+
+        with patch("app.routers.exports.render_clip", new=_fake_render_success):
+            response = client.post(
+                f"/api/v1/clips/{clip.id}/export?force=true", headers=auth_headers
+            )
+
+        assert response.status_code == 200
+        body = response.json()
+        assert body["clip_id"] == clip.id
+        assert body["below_threshold"] is True
 
 
 class TestExportStatus:
@@ -352,6 +388,7 @@ class TestAutoBrollToggle:
             end_time=10.0,
             order_index=0,
             status=ClipStatus.draft,
+            virality_score=80.0,
         )
         db_session.add(clip)
         db_session.commit()

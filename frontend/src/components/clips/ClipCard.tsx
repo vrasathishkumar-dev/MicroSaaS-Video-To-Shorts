@@ -115,7 +115,11 @@ export function ClipCard({ clip, onDelete, className }: ClipCardProps) {
             <ViralityScoreBadge insights={virality} size="sm" className="shrink-0" />
             <span className="flex shrink-0 items-center gap-1 whitespace-nowrap rounded-full bg-primary/10 px-2.5 py-1 text-[11px] font-semibold text-primary group-hover:bg-primary group-hover:text-white transition-colors">
               <Download className="h-3 w-3" />
-              {clip.status === 'ready' ? 'Download' : 'Export 9:16'}
+              {clip.status === 'ready'
+                ? 'Download'
+                : virality.score !== null && virality.score < 50
+                  ? 'Needs Review'
+                  : 'Export 9:16'}
             </span>
           </div>
         </div>

@@ -82,4 +82,29 @@ describe('ExportPanel', () => {
     expect(await screen.findByText(/failed to start export/i)).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /retry export/i })).toBeInTheDocument();
   });
+
+  it('shows the score gate confirmation dialog when virality score is below 50', async () => {
+    const user = userEvent.setup();
+    mockedGetExportStatus.mockRejectedValueOnce(new Error('no export yet'));
+
+    render(<ExportPanel clipId={1} viralityScore={42} />);
+    const exportButton = await screen.findByRole('button', { name: /export \(9:16\)/i });
+    await user.click(exportButton);
+
+    expect(await screen.findByText(/viral content gate: low virality score/i)).toBeInTheDocument();
+    expect(screen.getByText(/42\/100/i)).toBeInTheDocument();
+    expect(mockedTriggerExport).not.toHaveBeenCalled();
+
+    // User can click "Render anyway" to force export
+    mockedTriggerExport.mockResolvedValueOnce({
+      clip_id: 1,
+      status: 'rendering',
+      video_file_path: null,
+    });
+
+    const renderAnywayButton = screen.getByRole('button', { name: /render anyway/i });
+    await user.click(renderAnywayButton);
+
+    expect(mockedTriggerExport).toHaveBeenCalledWith(1, true);
+  });
 });
