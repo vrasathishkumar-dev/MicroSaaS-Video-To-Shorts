@@ -942,15 +942,10 @@ def _apply_broll(
     half_height = height // 2
 
     if placement == BrollPlacement.split:
-        # The main video shrinks into its own top half up front (not
-        # per-asset, since ffmpeg's scale/pad can't change mid-stream) and
-        # the bottom half is padded in as black canvas for B-roll to fill.
-        # ponytail: a stretch with no B-roll enabled shows that half as a
-        # black band rather than falling back to a full-frame main video --
-        # acceptable since auto-sourcing now targets full-clip coverage;
-        # revisit if manual editing leaves visible gaps common.
+        # The main video is placed in the top half (preserving natural 1:1 aspect
+        # ratio without vertical squashing) and the bottom half is padded as black canvas for B-roll.
         video_stream = (
-            video_stream.filter("scale", width, half_height)
+            video_stream.filter("crop", width, half_height, 0, 0)
             .filter("pad", width, height, 0, 0, color="black")
             .filter("setsar", 1)
         )
@@ -995,8 +990,8 @@ def _apply_broll(
 
         if placement == BrollPlacement.split:
             overlay_stream = broll_input.video.filter(
-                "scale", width, half_height
-            ).filter("setsar", 1)
+                "scale", width, half_height, force_original_aspect_ratio="increase"
+            ).filter("crop", width, half_height).filter("setsar", 1)
             overlay_x, overlay_y = 0, half_height
         elif placement in (BrollPlacement.top, BrollPlacement.bottom):
             overlay_stream = broll_input.video.filter(

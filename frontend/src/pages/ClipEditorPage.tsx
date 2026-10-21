@@ -310,6 +310,7 @@ export function ClipEditorPage() {
 
   const duration = Math.max(0, clip.end_time - clip.start_time);
   const virality = clipToViralityInsights(clip);
+  const isRenderedClip = clip.status === 'ready' && Boolean(clip.video_file_path);
 
   const relativeTime = clip.status === 'ready' ? currentTime : Math.max(0, currentTime - clip.start_time);
   const activeBroll = brollAssets.find(
@@ -458,7 +459,7 @@ export function ClipEditorPage() {
               </div>
             ) : (
               <>
-                {framingMode === 'dynamic_blur' && (
+                {framingMode === 'dynamic_blur' && !isRenderedClip && (
                   <div className="absolute inset-0 overflow-hidden opacity-70 filter blur-xl scale-125 pointer-events-none">
                     <video
                       src={getClipPreviewUrl(clip.id)}
@@ -472,16 +473,16 @@ export function ClipEditorPage() {
                 <div
                   className={cn(
                     'absolute inset-0 flex flex-col',
-                    framingMode === 'dynamic_blur' && 'z-10'
+                    framingMode === 'dynamic_blur' && !isRenderedClip && 'z-10'
                   )}
                 >
                   <div
                     className="relative overflow-hidden"
                     style={{
                       height:
-                        brollPlacement === 'split' && activeBroll
+                        !isRenderedClip && brollPlacement === 'split' && activeBroll
                           ? '50%'
-                          : splitSection
+                          : !isRenderedClip && splitSection
                             ? '50%'
                             : '100%',
                     }}
@@ -491,13 +492,15 @@ export function ClipEditorPage() {
                       key={clip.id}
                       src={getClipPreviewUrl(clip.id)}
                       playsInline
-                      style={topPaneStyle}
+                      style={!isRenderedClip ? topPaneStyle : undefined}
                       className={cn(
-                        topPaneStyle
-                          ? 'object-cover'
-                          : framingMode === 'speaker_focus'
-                            ? 'h-full w-full object-cover scale-125 object-center'
-                            : 'h-full w-full object-contain'
+                        isRenderedClip
+                          ? 'h-full w-full object-cover'
+                          : topPaneStyle
+                            ? 'object-cover'
+                            : framingMode === 'speaker_focus'
+                              ? 'h-full w-full object-cover object-center'
+                              : 'h-full w-full object-contain'
                       )}
                       onError={() => setPreviewFailed(true)}
                       onPlay={(event) => {
@@ -525,31 +528,33 @@ export function ClipEditorPage() {
                     />
                   </div>
 
-                  <div
-                    className="relative overflow-hidden"
-                    style={{
-                      height:
-                        splitSection && !(brollPlacement === 'split' && activeBroll)
-                          ? '50%'
-                          : '0%',
-                    }}
-                  >
-                    {hasSplitScreen && (
-                      <video
-                        ref={secondPaneRef}
-                        src={getClipPreviewUrl(clip.id)}
-                        playsInline
-                        muted
-                        preload="auto"
-                        style={bottomPaneStyle}
-                        className="object-cover"
-                      />
-                    )}
-                  </div>
+                  {!isRenderedClip && (
+                    <div
+                      className="relative overflow-hidden"
+                      style={{
+                        height:
+                          splitSection && !(brollPlacement === 'split' && activeBroll)
+                            ? '50%'
+                            : '0%',
+                      }}
+                    >
+                      {hasSplitScreen && (
+                        <video
+                          ref={secondPaneRef}
+                          src={getClipPreviewUrl(clip.id)}
+                          playsInline
+                          muted
+                          preload="auto"
+                          style={bottomPaneStyle}
+                          className="object-cover"
+                        />
+                      )}
+                    </div>
+                  )}
                 </div>
 
-                {/* Live Word-Synced B-Roll Overlay positioned per brollPlacement */}
-                {activeBroll && (
+                {/* Live Word-Synced B-Roll Overlay positioned per brollPlacement - ONLY for unrendered draft clips */}
+                {!isRenderedClip && activeBroll && (
                   <div
                     className={cn(
                       'absolute z-20 overflow-hidden shadow-2xl animate-in fade-in duration-200',
@@ -621,7 +626,10 @@ export function ClipEditorPage() {
                   </button>
 
                   <span className="font-mono text-[11px] text-muted-foreground">
-                    {currentTime.toFixed(1)}s / {clip.end_time.toFixed(1)}s
+                    {currentTime.toFixed(1)}s /{' '}
+                    {isRenderedClip
+                      ? duration.toFixed(1)
+                      : clip.end_time.toFixed(1)}s
                   </span>
 
                   <button
