@@ -726,6 +726,7 @@ export function ClipEditorPage() {
               clipId={clip.id}
               placement={brollPlacement}
               onPlacementChange={handleBrollPlacementChange}
+              onAssetsChange={setBrollAssets}
             />
           )}
 

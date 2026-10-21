@@ -27,6 +27,8 @@ export interface BrollPanelProps {
   /** Where B-roll sits on screen for this clip -- one choice for the whole clip. */
   placement: BrollPlacement;
   onPlacementChange: (placement: BrollPlacement) => void;
+  /** Called whenever the clip's asset list changes, so the live preview can mirror it. */
+  onAssetsChange?: (assets: BrollAsset[]) => void;
 }
 
 const PLACEMENT_OPTIONS: Array<{
@@ -47,7 +49,12 @@ const PLACEMENT_OPTIONS: Array<{
  * be dropped into a clip editor layout as
  * `<BrollPanel clipId={clip.id} placement={p} onPlacementChange={fn} />`.
  */
-export function BrollPanel({ clipId, placement, onPlacementChange }: BrollPanelProps) {
+export function BrollPanel({
+  clipId,
+  placement,
+  onPlacementChange,
+  onAssetsChange,
+}: BrollPanelProps) {
   const [assets, setAssets] = useState<BrollAsset[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [isAutoSourcing, setIsAutoSourcing] = useState(false);
@@ -71,6 +78,10 @@ export function BrollPanel({ clipId, placement, onPlacementChange }: BrollPanelP
   useEffect(() => {
     void loadAssets();
   }, [loadAssets]);
+
+  useEffect(() => {
+    if (!isLoading) onAssetsChange?.(assets);
+  }, [assets, isLoading, onAssetsChange]);
 
   const handleAutoSource = async () => {
     setIsAutoSourcing(true);
