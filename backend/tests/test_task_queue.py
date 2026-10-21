@@ -49,7 +49,7 @@ class TestEnqueue:
 
         mock_from_url.assert_called_once_with("redis://localhost:6379/0")
         mock_queue_cls.assert_called_once()
-        mock_queue.enqueue.assert_called_once_with(_job, 1, 2)
+        mock_queue.enqueue.assert_called_once_with(_job, 1, 2, job_timeout=3600)
         # The Redis path must NOT also schedule a BackgroundTask -- that
         # would run the job twice (once in-process, once via the worker).
         assert len(background_tasks.tasks) == 0
