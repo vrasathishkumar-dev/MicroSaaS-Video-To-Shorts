@@ -588,10 +588,14 @@ export function ClipEditorPage() {
                 {activeCaption && clip.status !== 'ready' && (
                   <div
                     className={cn(
-                      'absolute inset-x-4 z-30 pointer-events-none text-center',
-                      activeBroll && (brollPlacement === 'bottom' || brollPlacement === 'split')
-                        ? 'top-[48%] -translate-y-1/2'
-                        : 'bottom-14',
+                      'absolute inset-x-4 z-30 pointer-events-none text-center transition-all duration-200',
+                      !activeBroll
+                        ? 'bottom-14'
+                        : brollPlacement === 'bottom'
+                          ? 'bottom-[26%]'
+                          : brollPlacement === 'split'
+                            ? 'bottom-[51%]'
+                            : 'bottom-14',
                     )}
                   >
                     <span

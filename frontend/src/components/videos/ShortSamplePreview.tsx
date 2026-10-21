@@ -527,16 +527,22 @@ export function ShortSamplePreview({
           </div>
         </div>
 
-        {/* Captions Overlay Center */}
+        {/* Captions Overlay: at bottom when B-roll is off/top/corner, and on top of B-roll when bottom/split B-roll is active */}
         <div
           className={cn(
-            'relative z-30 px-3 transition-all duration-300',
-            brollPlacement === 'bottom' && autoBroll
-              ? 'mb-3'
-              : 'mb-4'
+            'absolute inset-x-3 z-30 pointer-events-none flex justify-center transition-all duration-300',
+            !autoBroll
+              ? 'bottom-16'
+              : brollPlacement === 'bottom'
+                ? 'bottom-[26%]'
+                : brollPlacement === 'split'
+                  ? 'bottom-[51%]'
+                  : 'bottom-16'
           )}
         >
-          {renderCaptionText()}
+          <div className="max-w-[95%]">
+            {renderCaptionText()}
+          </div>
         </div>
 
         {/* Bottom Metadata & Info Bar */}

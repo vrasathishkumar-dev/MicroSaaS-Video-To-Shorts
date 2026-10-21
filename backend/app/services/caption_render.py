@@ -142,6 +142,7 @@ def render_caption_images(
     height: int,
     font_file: str | None,
     style: CaptionStyle | str | None = None,
+    bottom_margin: int | None = None,
 ) -> list[CaptionImage] | None:
     """Rasterise each caption to a transparent PNG in `output_dir`.
 
@@ -197,7 +198,11 @@ def render_caption_images(
     line_spacing = int(font_size * 0.22)
     padding = int(font_size * 0.35)
     max_text_width = int(width * _TEXT_WIDTH_RATIO)
-    bottom_margin = int(height * settings.RENDER_CAPTION_MARGIN_RATIO)
+    bottom_margin = (
+        bottom_margin
+        if bottom_margin is not None
+        else int(height * settings.RENDER_CAPTION_MARGIN_RATIO)
+    )
     space_width = _text_width(" ", font)
 
     rendered: list[CaptionImage] = []

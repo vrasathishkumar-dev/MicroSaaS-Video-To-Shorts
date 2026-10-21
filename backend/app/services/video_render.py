@@ -611,6 +611,8 @@ def _apply_captions(
     events: list[tuple[float, float, str]],
     tmp_dir: Path,
     caption_style: ClipCaptionStyle | None = None,
+    broll_placement: BrollPlacement | None = None,
+    has_broll: bool = False,
 ) -> Any:
     """Burn `events` into `video_stream` using whichever backend ffmpeg has.
 
@@ -628,6 +630,12 @@ def _apply_captions(
         return video_stream
 
     if backend == "image":
+        bottom_margin = None
+        if has_broll and broll_placement == BrollPlacement.bottom:
+            bottom_margin = int(settings.RENDER_HEIGHT * (_BROLL_BAND_HEIGHT_RATIO + 0.02))
+        elif has_broll and broll_placement == BrollPlacement.split:
+            bottom_margin = int(settings.RENDER_HEIGHT * 0.52)
+
         images = render_caption_images(
             events,
             tmp_dir,
@@ -635,6 +643,7 @@ def _apply_captions(
             settings.RENDER_HEIGHT,
             _caption_font_file(),
             caption_style.value if caption_style else None,
+            bottom_margin=bottom_margin,
         )
         if images is not None:
             for image in images:
@@ -1076,7 +1085,14 @@ def _run_ffmpeg(
     video_stream = _apply_broll(
         video_stream, broll_assets, duration, tmp_dir, broll_placement
     )
-    video_stream = _apply_captions(video_stream, captions, tmp_dir, caption_style)
+    video_stream = _apply_captions(
+        video_stream,
+        captions,
+        tmp_dir,
+        caption_style,
+        broll_placement=broll_placement,
+        has_broll=bool(broll_assets),
+    )
 
     _encode(video_stream, main_input, output_path, source_path)
     return speaker_framing
