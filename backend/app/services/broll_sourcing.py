@@ -644,6 +644,7 @@ def _synthesize_local_broll(keyword: str, index: int, duration: float) -> dict |
                 str(output_path),
             ],
             check=True,
+            stdin=subprocess.DEVNULL,
             capture_output=True,
             timeout=30,
         )

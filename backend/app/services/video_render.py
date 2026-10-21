@@ -365,6 +365,7 @@ def _available_filters() -> frozenset[str]:
     try:
         result = subprocess.run(
             ["ffmpeg", "-hide_banner", "-filters"],
+            stdin=subprocess.DEVNULL,
             capture_output=True,
             text=True,
             timeout=30,

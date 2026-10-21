@@ -1,3 +1,4 @@
+import { getApiErrorMessage } from '@/lib/apiError';
 import { useState, useEffect, useRef } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { motion, AnimatePresence } from 'framer-motion';
@@ -165,12 +166,11 @@ export function GeneratePage() {
       setActiveProject(res.project);
       setActiveClips(res.clips);
     } catch (err: unknown) {
-      const msg =
+      setError(
         err && typeof err === 'object' && 'response' in err
-          ? // @ts-expect-error axios response data check
-            (err.response?.data?.detail ?? 'Failed to generate shorts.')
-          : 'Failed to start video generation. Please check your network connection.';
-      setError(String(msg));
+          ? getApiErrorMessage(err, 'Failed to generate shorts.')
+          : 'Failed to start video generation. Please check your network connection.',
+      );
     } finally {
       setIsSubmitting(false);
     }
