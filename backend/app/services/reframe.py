@@ -638,6 +638,9 @@ def _detect_faces(luma) -> dict[int, list[tuple[int, int, int, int]]]:  # type: 
 
     try:
         import cv2
+
+        # OpenCL (Metal) segfaults in the forked RQ work-horse on macOS.
+        cv2.ocl.setUseOpenCL(False)
     except ImportError:
         logger.info(
             "reframe: OpenCV is not installed, so face detection is "
