@@ -66,6 +66,27 @@ describe('BrollPanel', () => {
     expect(mockedAutoSourceBroll).toHaveBeenCalledWith(5);
   });
 
+  it('reports its asset list to the parent after auto-insert so the preview can show it', async () => {
+    const user = userEvent.setup();
+    const onAssetsChange = vi.fn();
+    mockedGetClipBrollAssets.mockResolvedValueOnce([]).mockResolvedValueOnce(assets);
+    mockedAutoSourceBroll.mockResolvedValueOnce(assets);
+
+    render(
+      <BrollPanel
+        clipId={5}
+        placement="bottom"
+        onPlacementChange={vi.fn()}
+        onAssetsChange={onAssetsChange}
+      />,
+    );
+    await screen.findByText(/no b-roll attached yet/i);
+    await user.click(screen.getByRole('button', { name: /auto-insert b-roll/i }));
+    await screen.findByText('city skyline');
+
+    expect(onAssetsChange).toHaveBeenLastCalledWith(assets);
+  });
+
   it('reports a placement change without touching the B-roll list', async () => {
     const user = userEvent.setup();
     const onPlacementChange = vi.fn();
