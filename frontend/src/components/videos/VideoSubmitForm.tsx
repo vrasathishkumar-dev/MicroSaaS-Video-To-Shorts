@@ -12,11 +12,16 @@ import {
   Sliders,
   PlaySquare,
   Wand2,
+  PanelBottom,
+  PanelTop,
+  PictureInPicture2,
+  Rows2,
 } from 'lucide-react';
 import { GradientButton } from '@/components/ui/GradientButton';
 import { cn } from '@/lib/utils';
 import { submitVideo } from '@/services/videoService';
 import type {
+  BrollPlacement,
   CaptionStylePreset,
   ClipLength,
   FramingMode,
@@ -27,6 +32,38 @@ import type {
 export interface VideoSubmitFormProps {
   onSuccess: (video: VideoProject) => void;
 }
+
+const BROLL_PLACEMENT_OPTIONS: Array<{
+  id: BrollPlacement;
+  label: string;
+  sub: string;
+  icon: typeof PanelBottom;
+}> = [
+  {
+    id: 'bottom',
+    label: 'Bottom Third',
+    sub: 'Full-width cinematic strip',
+    icon: PanelBottom,
+  },
+  {
+    id: 'split',
+    label: 'Split Screen',
+    sub: '50/50 dual video stack',
+    icon: Rows2,
+  },
+  {
+    id: 'bottom_right',
+    label: 'Corner PIP',
+    sub: 'Floating picture-in-picture',
+    icon: PictureInPicture2,
+  },
+  {
+    id: 'top',
+    label: 'Top Third',
+    sub: 'Full-width header banner',
+    icon: PanelTop,
+  },
+];
 
 type SubmitMode = Extract<VideoSourceType, 'upload' | 'url'>;
 
@@ -54,6 +91,7 @@ export function VideoSubmitForm({ onSuccess }: VideoSubmitFormProps) {
   const [subtitleStyle, setSubtitleStyle] = useState<CaptionStylePreset>('hormozi');
   const [framingMode, setFramingMode] = useState<FramingMode>('speaker_focus');
   const [autoBroll, setAutoBroll] = useState(true);
+  const [brollPlacement, setBrollPlacement] = useState<BrollPlacement>('bottom');
   const [autoProduce, setAutoProduce] = useState(true);
 
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -113,6 +151,7 @@ export function VideoSubmitForm({ onSuccess }: VideoSubmitFormProps) {
           framingMode,
           captionStyle: subtitleStyle,
           autoBroll,
+          brollPlacement,
           autoProduce,
         },
         (progressEvent: AxiosProgressEvent) => {
@@ -449,6 +488,49 @@ export function VideoSubmitForm({ onSuccess }: VideoSubmitFormProps) {
                 />
               </span>
             </button>
+
+            {autoBroll && (
+              <div className="space-y-2 rounded-xl border border-primary/20 bg-primary/5 p-3">
+                <div className="flex items-center justify-between">
+                  <span className="text-xs font-semibold text-foreground flex items-center gap-1.5">
+                    <Film className="h-3.5 w-3.5 text-primary" />
+                    B-Roll Layout / Positioning
+                  </span>
+                  <span className="text-[10px] text-muted-foreground">
+                    Where footage appears in 9:16 canvas
+                  </span>
+                </div>
+
+                <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+                  {BROLL_PLACEMENT_OPTIONS.map((opt) => {
+                    const Icon = opt.icon;
+                    const isSelected = brollPlacement === opt.id;
+                    return (
+                      <button
+                        key={opt.id}
+                        type="button"
+                        onClick={() => setBrollPlacement(opt.id)}
+                        className={cn(
+                          'flex flex-col items-start gap-1 rounded-lg border p-2.5 text-left transition-all',
+                          isSelected
+                            ? 'border-primary bg-primary/20 text-primary shadow-sm ring-1 ring-primary/40'
+                            : 'border-glass-border bg-background/60 text-muted-foreground hover:border-glass-border/80 hover:text-foreground',
+                        )}
+                      >
+                        <div className="flex w-full items-center justify-between">
+                          <Icon className={cn('h-4 w-4 shrink-0', isSelected ? 'text-primary' : 'text-muted-foreground')} />
+                          {isSelected && (
+                            <span className="h-1.5 w-1.5 rounded-full bg-primary" />
+                          )}
+                        </div>
+                        <span className="text-xs font-bold leading-tight text-foreground">{opt.label}</span>
+                        <span className="text-[10px] leading-tight text-muted-foreground">{opt.sub}</span>
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
           </div>
         )}
       </div>

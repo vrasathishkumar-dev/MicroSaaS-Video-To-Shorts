@@ -21,7 +21,13 @@ from app.auth.rate_limit import rate_limit_video_submit
 from app.database import SessionLocal
 from app.dependencies import get_current_user, get_db
 from app.exceptions import NotFoundError, ValidationAppError
-from app.models.clip import Clip, ClipCaptionStyle, ClipFraming, ClipStatus
+from app.models.clip import (
+    BrollPlacement,
+    Clip,
+    ClipCaptionStyle,
+    ClipFraming,
+    ClipStatus,
+)
 from app.models.transcript_segment import TranscriptSegment
 from app.models.user import User
 from app.models.video_project import (
@@ -287,6 +293,7 @@ async def create_video_project(
     framing_mode: ClipFraming = Form(default=ClipFraming.speaker_focus),
     caption_style: ClipCaptionStyle = Form(default=ClipCaptionStyle.hormozi),
     auto_broll: str = Form(default="true"),
+    broll_placement: BrollPlacement = Form(default=BrollPlacement.bottom),
     auto_produce: str = Form(default="false"),
     file: UploadFile | None = File(default=None),
     db: Session = Depends(get_db),
@@ -314,6 +321,7 @@ async def create_video_project(
         framing_mode=framing_mode,
         caption_style=caption_style,
         auto_broll=auto_broll_bool,
+        broll_placement=broll_placement,
     )
 
     if file is not None:

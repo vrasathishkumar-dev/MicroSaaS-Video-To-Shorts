@@ -54,6 +54,25 @@ class TestCreateUpload:
         # the time client.post() returned, so a follow-up GET reflects it.
         get_resp = client.get(f"/api/v1/videos/{body['id']}", headers=auth_headers)
         assert get_resp.json()["status"] == "ready"
+        assert get_resp.json()["broll_placement"] == "bottom"
+
+    def test_create_via_upload_custom_broll_placement(
+        self, client: TestClient, auth_headers: dict[str, str]
+    ) -> None:
+        with patch(
+            "app.routers.videos.transcribe_video",
+            new=AsyncMock(return_value=FAKE_SEGMENTS),
+        ):
+            files = {"file": ("clip.mp4", b"fake video bytes", "video/mp4")}
+            data = {"title": "Split B-Roll Project", "source_type": "upload", "broll_placement": "split"}
+            response = client.post("/api/v1/videos", data=data, files=files, headers=auth_headers)
+
+        assert response.status_code == 201
+        body = response.json()
+        assert body["broll_placement"] == "split"
+
+        get_resp = client.get(f"/api/v1/videos/{body['id']}", headers=auth_headers)
+        assert get_resp.json()["broll_placement"] == "split"
 
     def test_create_via_upload_missing_file_422(
         self, client: TestClient, auth_headers: dict[str, str]

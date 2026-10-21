@@ -9,7 +9,7 @@ from sqlalchemy import Boolean, Enum, Float, ForeignKey, Integer, String, Text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.models.base import Base, TimestampMixin
-from app.models.clip import ClipCaptionStyle, ClipFraming
+from app.models.clip import BrollPlacement, ClipCaptionStyle, ClipFraming
 
 if TYPE_CHECKING:
     from app.models.clip import Clip
@@ -126,6 +126,12 @@ class VideoProject(Base, TimestampMixin):
         Boolean,
         default=True,
         server_default="true",
+        nullable=False,
+    )
+    broll_placement: Mapped[BrollPlacement] = mapped_column(
+        Enum(BrollPlacement, name="broll_placement"),
+        default=BrollPlacement.bottom,
+        server_default=BrollPlacement.bottom.value,
         nullable=False,
     )
 

@@ -62,6 +62,7 @@ def test_generate_from_text_endpoint(
                 "shorts_count": 3,
                 "caption_style": "hormozi",
                 "auto_broll": True,
+                "broll_placement": "split",
             },
         )
 
@@ -75,12 +76,14 @@ def test_generate_from_text_endpoint(
         assert project["source_type"] == "text"
         assert project["status"] == "generating"
         assert project["shorts_count"] == 3
+        assert project["broll_placement"] == "split"
 
         clips = data["clips"]
         assert len(clips) == 3
         for clip in clips:
             assert clip["status"] == "rendering"
             assert clip["video_project_id"] == project["id"]
+            assert clip["broll_placement"] == "split"
             assert len(clip["title"]) > 0
 
         # Verify background tasks were queued

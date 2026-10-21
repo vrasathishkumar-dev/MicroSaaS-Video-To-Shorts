@@ -49,6 +49,7 @@ export interface VideoProject {
   framing_mode: FramingMode;
   caption_style: CaptionStylePreset;
   auto_broll: boolean;
+  broll_placement?: BrollPlacement;
   created_at: string;
   updated_at: string;
 }

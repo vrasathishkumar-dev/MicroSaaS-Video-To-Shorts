@@ -1,5 +1,5 @@
 import api from '@/services/api';
-import type { CaptionStylePreset, Clip, VideoProject } from '@/types';
+import type { BrollPlacement, CaptionStylePreset, Clip, VideoProject } from '@/types';
 
 export interface GenerateRequest {
   title: string;
@@ -7,6 +7,7 @@ export interface GenerateRequest {
   shorts_count: number;
   caption_style?: CaptionStylePreset;
   auto_broll?: boolean;
+  broll_placement?: BrollPlacement;
 }
 
 export interface GenerateResponse {
@@ -27,6 +28,7 @@ export async function generateFromText(
     shorts_count: payload.shorts_count,
     caption_style: payload.caption_style ?? 'hormozi',
     auto_broll: payload.auto_broll ?? true,
+    broll_placement: payload.broll_placement ?? 'bottom',
   });
   return data;
 }

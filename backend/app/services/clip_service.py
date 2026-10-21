@@ -784,7 +784,7 @@ def create_clips_from_highlights(
             # already looks the way they set it up.
             framing_mode=project.framing_mode,
             caption_style=project.caption_style,
-            broll_placement=BrollPlacement.bottom,
+            broll_placement=getattr(project, "broll_placement", BrollPlacement.bottom) or BrollPlacement.bottom,
         )
         # Partial score (hook + completeness only) -- framing isn't
         # available until this clip renders (see video_render.py), so

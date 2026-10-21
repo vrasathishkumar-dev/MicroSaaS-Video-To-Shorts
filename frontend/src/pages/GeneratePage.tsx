@@ -16,6 +16,10 @@ import {
   ChevronRight,
   RefreshCw,
   Lightbulb,
+  PanelBottom,
+  Rows2,
+  PictureInPicture2,
+  PanelTop,
 } from 'lucide-react';
 import { GlassCard } from '@/components/ui/GlassCard';
 import { GradientButton } from '@/components/ui/GradientButton';
@@ -25,6 +29,7 @@ import { listClips, getClipPreviewUrl } from '@/services/clipService';
 import { getVideo } from '@/services/videoService';
 import { cn } from '@/lib/utils';
 import type {
+  BrollPlacement,
   CaptionStylePreset,
   Clip,
   VideoProject,
@@ -61,6 +66,38 @@ const CAPTION_STYLES: { id: CaptionStylePreset; name: string; desc: string }[] =
   { id: 'minimal', name: 'Clean Minimal', desc: 'Subtle clean subtitles along the lower third' },
 ];
 
+const BROLL_PLACEMENT_OPTIONS: Array<{
+  id: BrollPlacement;
+  label: string;
+  sub: string;
+  icon: typeof PanelBottom;
+}> = [
+  {
+    id: 'bottom',
+    label: 'Bottom Third',
+    sub: 'Full-width cinematic strip',
+    icon: PanelBottom,
+  },
+  {
+    id: 'split',
+    label: 'Split Screen',
+    sub: '50/50 dual video stack',
+    icon: Rows2,
+  },
+  {
+    id: 'bottom_right',
+    label: 'Corner PIP',
+    sub: 'Floating picture-in-picture',
+    icon: PictureInPicture2,
+  },
+  {
+    id: 'top',
+    label: 'Top Third',
+    sub: 'Header visual overlay',
+    icon: PanelTop,
+  },
+];
+
 export function GeneratePage() {
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
@@ -75,6 +112,7 @@ export function GeneratePage() {
   const [shortsCount, setShortsCount] = useState<number>(3);
   const [captionStyle, setCaptionStyle] = useState<CaptionStylePreset>('hormozi');
   const [autoBroll, setAutoBroll] = useState(true);
+  const [brollPlacement, setBrollPlacement] = useState<BrollPlacement>('bottom');
 
   // Submission & Generation State
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -161,6 +199,7 @@ export function GeneratePage() {
         shorts_count: shortsCount,
         caption_style: captionStyle,
         auto_broll: autoBroll,
+        broll_placement: brollPlacement,
       });
 
       setActiveProject(res.project);
@@ -363,6 +402,49 @@ export function GeneratePage() {
                   className="h-4 w-4 rounded border-glass-border accent-primary cursor-pointer"
                 />
               </div>
+
+              {autoBroll && (
+                <div className="space-y-2 rounded-xl border border-primary/20 bg-primary/5 p-3.5">
+                  <div className="flex items-center justify-between">
+                    <span className="text-xs font-semibold text-foreground flex items-center gap-1.5">
+                      <Film className="h-3.5 w-3.5 text-primary" />
+                      B-Roll Layout / Positioning
+                    </span>
+                    <span className="text-[10px] text-muted-foreground">
+                      Where footage appears in 9:16 canvas
+                    </span>
+                  </div>
+
+                  <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+                    {BROLL_PLACEMENT_OPTIONS.map((opt) => {
+                      const Icon = opt.icon;
+                      const isSelected = brollPlacement === opt.id;
+                      return (
+                        <button
+                          key={opt.id}
+                          type="button"
+                          onClick={() => setBrollPlacement(opt.id)}
+                          className={cn(
+                            'flex flex-col items-start gap-1 rounded-lg border p-2.5 text-left transition-all',
+                            isSelected
+                              ? 'border-primary bg-primary/20 text-primary shadow-sm ring-1 ring-primary/40'
+                              : 'border-glass-border bg-background/60 text-muted-foreground hover:border-glass-border/80 hover:text-foreground',
+                          )}
+                        >
+                          <div className="flex w-full items-center justify-between">
+                            <Icon className={cn('h-4 w-4 shrink-0', isSelected ? 'text-primary' : 'text-muted-foreground')} />
+                            {isSelected && (
+                              <span className="h-1.5 w-1.5 rounded-full bg-primary" />
+                            )}
+                          </div>
+                          <span className="text-xs font-bold leading-tight text-foreground">{opt.label}</span>
+                          <span className="text-[10px] leading-tight text-muted-foreground">{opt.sub}</span>
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
 
               {error && (
                 <div className="flex items-center gap-2 rounded-xl border border-destructive/30 bg-destructive/10 p-3 text-xs text-destructive">

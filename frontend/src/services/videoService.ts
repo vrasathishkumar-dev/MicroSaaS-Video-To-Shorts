@@ -1,6 +1,7 @@
 import type { AxiosProgressEvent } from 'axios';
 import api from '@/services/api';
 import type {
+  BrollPlacement,
   CaptionStylePreset,
   Clip,
   ClipLength,
@@ -22,6 +23,7 @@ export interface SubmitVideoPayload {
   framingMode: FramingMode;
   captionStyle: CaptionStylePreset;
   autoBroll: boolean;
+  brollPlacement?: BrollPlacement;
   /** When true, automatically generates clips, adds B-roll, and renders 9:16 MP4s. */
   autoProduce?: boolean;
 }
@@ -68,6 +70,9 @@ export async function submitVideo(
   formData.append('framing_mode', payload.framingMode);
   formData.append('caption_style', payload.captionStyle);
   formData.append('auto_broll', String(payload.autoBroll));
+  if (payload.brollPlacement) {
+    formData.append('broll_placement', payload.brollPlacement);
+  }
   if (payload.autoProduce !== undefined) {
     formData.append('auto_produce', String(payload.autoProduce));
   }

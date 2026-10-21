@@ -23,7 +23,13 @@ from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from app.dependencies import get_current_user, get_db
-from app.models.clip import Clip, ClipCaptionStyle, ClipFraming, ClipStatus
+from app.models.clip import (
+    BrollPlacement,
+    Clip,
+    ClipCaptionStyle,
+    ClipFraming,
+    ClipStatus,
+)
 from app.models.user import User
 from app.models.video_project import (
     ClipLength,
@@ -63,6 +69,7 @@ class GenerateRequest(BaseModel):
     )
     caption_style: ClipCaptionStyle = ClipCaptionStyle.hormozi
     auto_broll: bool = True
+    broll_placement: BrollPlacement = BrollPlacement.bottom
 
 
 class GenerateResponse(BaseModel):
@@ -102,6 +109,7 @@ def generate_from_text(
         framing_mode=ClipFraming.dynamic_blur,
         caption_style=payload.caption_style,
         auto_broll=payload.auto_broll,
+        broll_placement=payload.broll_placement,
     )
     db.add(project)
     db.commit()
@@ -141,6 +149,7 @@ def generate_from_text(
             caption_text=seg.narration,
             caption_style=payload.caption_style,
             framing_mode=ClipFraming.dynamic_blur,
+            broll_placement=payload.broll_placement,
             virality_reason=kw_payload,
         )
         db.add(clip)
