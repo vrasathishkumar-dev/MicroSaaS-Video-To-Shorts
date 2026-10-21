@@ -98,13 +98,13 @@ export function ViralityScoreBadge({
     <div className={cn('flex flex-col gap-2', className)}>
       <div
         className={cn(
-          'inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 font-semibold tracking-wide backdrop-blur-md',
+          'inline-flex items-center gap-1.5 whitespace-nowrap rounded-full border px-2.5 py-1 font-semibold tracking-wide backdrop-blur-md',
           badgeColor,
           size === 'sm' ? 'text-xs' : size === 'lg' ? 'text-base px-3.5 py-1.5' : 'text-xs',
         )}
       >
         {icon}
-        <span>Score {insights.score}/100</span>
+        <span>Score {Math.round(insights.score)}/100</span>
         {/* sm shares a tight footer row with the Download pill — the color
             already encodes the tier, so drop the label text there. */}
         {size !== 'sm' && (

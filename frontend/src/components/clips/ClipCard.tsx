@@ -111,9 +111,9 @@ export function ClipCard({ clip, onDelete, className }: ClipCardProps) {
             )}
           </div>
 
-          <div className="pt-2 border-t border-glass-border flex items-center justify-between gap-2">
-            <ViralityScoreBadge insights={virality} size="sm" />
-            <span className="flex items-center gap-1 rounded-full bg-primary/10 px-2.5 py-1 text-[11px] font-semibold text-primary group-hover:bg-primary group-hover:text-white transition-colors">
+          <div className="pt-2 border-t border-glass-border flex flex-wrap items-center justify-between gap-2">
+            <ViralityScoreBadge insights={virality} size="sm" className="shrink-0" />
+            <span className="flex shrink-0 items-center gap-1 whitespace-nowrap rounded-full bg-primary/10 px-2.5 py-1 text-[11px] font-semibold text-primary group-hover:bg-primary group-hover:text-white transition-colors">
               <Download className="h-3 w-3" />
               {clip.status === 'ready' ? 'Download' : 'Export 9:16'}
             </span>
