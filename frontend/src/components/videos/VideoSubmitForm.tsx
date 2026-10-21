@@ -51,13 +51,13 @@ const BROLL_PLACEMENT_OPTIONS: Array<{
 }> = [
   {
     id: 'bottom',
-    label: 'Bottom Third',
-    sub: 'Full-width cinematic strip',
+    label: 'Bottom Split (25%)',
+    sub: 'Bottom 25% cinematic strip',
     icon: PanelBottom,
   },
   {
     id: 'split',
-    label: 'Split Screen',
+    label: 'Split Screen (50/50)',
     sub: '50/50 dual video stack',
     icon: Rows2,
   },
@@ -69,8 +69,8 @@ const BROLL_PLACEMENT_OPTIONS: Array<{
   },
   {
     id: 'top',
-    label: 'Top Third',
-    sub: 'Full-width header banner',
+    label: 'Top Split (25%)',
+    sub: 'Top 25% header banner',
     icon: PanelTop,
   },
 ];

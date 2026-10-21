@@ -125,7 +125,7 @@ _MAX_BROLL_DOWNLOAD_BYTES = 200 * 1024 * 1024  # 200MB
 _BROLL_CHUNK_SIZE = 1024 * 1024
 
 # How much of the frame height a "top"/"bottom" BrollPlacement band covers.
-_BROLL_BAND_HEIGHT_RATIO = 0.35
+_BROLL_BAND_HEIGHT_RATIO = 0.25
 
 # Caption layout/timing. Chunks are kept short so a burned-in line never
 # needs to wrap on a 1080-wide frame and stays readable at phone size.

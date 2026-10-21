@@ -559,11 +559,11 @@ export function ClipEditorPage() {
                     className={cn(
                       'absolute z-20 overflow-hidden shadow-2xl animate-in fade-in duration-200',
                       brollPlacement === 'bottom' &&
-                        'inset-x-0 bottom-11 h-[36%] w-full border-t-2 border-primary',
+                        'inset-x-0 bottom-11 h-[25%] w-full border-t-2 border-primary',
                       brollPlacement === 'split' &&
                         'inset-x-0 bottom-0 h-1/2 w-full border-t-2 border-primary',
                       brollPlacement === 'top' &&
-                        'inset-x-0 top-0 h-[36%] w-full border-b-2 border-primary',
+                        'inset-x-0 top-0 h-[25%] w-full border-b-2 border-primary',
                       brollPlacement === 'bottom_right' &&
                         'bottom-14 right-3 w-32 aspect-video rounded-xl border-2 border-primary',
                     )}

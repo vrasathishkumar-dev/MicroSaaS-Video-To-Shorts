@@ -438,7 +438,7 @@ export function ShortSamplePreview({
           {autoBroll && (
             <>
               {brollPlacement === 'bottom' && (
-                <div className="absolute inset-x-0 bottom-12 h-[35%] w-full border-t-2 border-primary shadow-2xl z-10 overflow-hidden animate-in fade-in duration-300">
+                <div className="absolute inset-x-0 bottom-0 h-[25%] w-full border-t-2 border-primary shadow-2xl z-10 overflow-hidden animate-in fade-in duration-300">
                   {renderBrollVisual()}
                 </div>
               )}
@@ -456,7 +456,7 @@ export function ShortSamplePreview({
               )}
 
               {brollPlacement === 'top' && (
-                <div className="absolute inset-x-0 top-0 h-[35%] w-full border-b-2 border-primary shadow-2xl z-10 overflow-hidden animate-in fade-in duration-300">
+                <div className="absolute inset-x-0 top-0 h-[25%] w-full border-b-2 border-primary shadow-2xl z-10 overflow-hidden animate-in fade-in duration-300">
                   {renderBrollVisual()}
                 </div>
               )}
@@ -637,12 +637,12 @@ export function ShortSamplePreview({
               <span className="block font-semibold text-foreground">
                 {autoBroll
                   ? brollPlacement === 'bottom'
-                    ? 'Bottom Third B-Roll'
+                    ? 'Bottom Split (25%)'
                     : brollPlacement === 'split'
                       ? 'Split Screen (50/50)'
                       : brollPlacement === 'bottom_right'
                         ? 'Corner PIP B-Roll'
-                        : 'Top Third B-Roll'
+                        : 'Top Split (25%)'
                   : 'B-Roll Disabled'}
               </span>
               <span className="block text-[9px] text-muted-foreground">

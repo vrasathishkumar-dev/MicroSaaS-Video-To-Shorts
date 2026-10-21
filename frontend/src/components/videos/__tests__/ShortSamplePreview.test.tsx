@@ -18,7 +18,7 @@ describe('ShortSamplePreview', () => {
     expect(screen.getByText('Live 9:16 Short Preview')).toBeInTheDocument();
     expect(screen.getByText('Speaker Focus')).toBeInTheDocument();
     expect(screen.getByText('Hormozi Pop')).toBeInTheDocument();
-    expect(screen.getByText('Bottom Third B-Roll')).toBeInTheDocument();
+    expect(screen.getByText('Bottom Split (25%)')).toBeInTheDocument();
     expect(screen.getByText('Auto (30-50s)')).toBeInTheDocument();
     expect(screen.getByText(/Viral Score/i)).toBeInTheDocument();
   });
