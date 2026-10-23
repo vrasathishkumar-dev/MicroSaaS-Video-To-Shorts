@@ -1301,3 +1301,75 @@ class TestViralityScoreRefinement:
         assert clip.completeness_score == 100.0
         assert clip.virality_score == 90.0
         assert clip.virality_reason == "Strong hook; strong sentence completeness."
+
+
+class TestCopyrightSafeRender:
+    """Verify end-to-end Copyright-Safe / Fair-Use transformative rendering."""
+
+    def test_copyright_safe_render_trims_hook_and_adds_commentary_broll(
+        self, db_session: Session, test_user: User
+    ) -> None:
+        import app.services.storage as storage_module
+
+        source_file = storage_module.UPLOAD_ROOT / "videos" / "cs_source.mp4"
+        _make_test_source_video(source_file, duration=15.0)
+
+        project = VideoProject(
+            user_id=test_user.id,
+            title="AI Future Interview",
+            source_type=SourceType.upload,
+            status=VideoProjectStatus.ready,
+            source_file_path="videos/cs_source.mp4",
+        )
+        db_session.add(project)
+        db_session.commit()
+        db_session.refresh(project)
+
+        db_session.add_all(
+            [
+                TranscriptSegment(
+                    video_project_id=project.id,
+                    start_time=0.0,
+                    end_time=4.5,
+                    text=(
+                        "I think artificial intelligence is going to get "
+                        "very smart fairly quickly."
+                    ),
+                    is_highlight=True,
+                ),
+                TranscriptSegment(
+                    video_project_id=project.id,
+                    start_time=4.5,
+                    end_time=14.0,
+                    text=(
+                        "We need to prepare our software engineering "
+                        "workflows for autonomous agents."
+                    ),
+                    is_highlight=True,
+                ),
+            ]
+        )
+        clip = Clip(
+            video_project_id=project.id,
+            user_id=test_user.id,
+            title="Um I think it's going to get very smart fairly quickly",
+            start_time=0.0,
+            end_time=14.0,
+            order_index=0,
+            status=ClipStatus.rendering,
+        )
+        db_session.add(clip)
+        db_session.commit()
+        db_session.refresh(clip)
+
+        render_clip(clip.id, copyright_safe=True)
+
+        db_session.refresh(clip)
+        assert clip.status == ClipStatus.ready
+        assert clip.video_file_path is not None
+
+        output_path = Path(clip.video_file_path)
+        assert output_path.is_file()
+        assert output_path.stat().st_size > 0
+        video = _probe_stream(output_path, "v:0", "width,height")
+        assert (video["width"], video["height"]) == ("1080", "1920")

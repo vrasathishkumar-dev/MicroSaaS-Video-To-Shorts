@@ -124,6 +124,15 @@ class Settings(BaseSettings):
     RENDER_AUDIO_BITRATE: str = "192k"
     # YouTube normalises playback to roughly -14 LUFS.
     RENDER_AUDIO_LUFS: float = -14.0
+    # ---- Copyright-Safe / Fair-Use Transformative Mode ---------------
+    # When enabled (globally via RENDER_COPYRIGHT_SAFE or per-export via
+    # ?copyright_safe=true), exports trim the raw source clip to a short
+    # hook (<= RENDER_HOOK_MAX_SECONDS), apply audio/visual fingerprint
+    # protection on the hook, and replace the rest of the Short with
+    # original AI commentary voiceover + full-screen B-roll cutaways.
+    RENDER_COPYRIGHT_SAFE: bool = False
+    RENDER_HOOK_MAX_SECONDS: float = 7.5
+    RENDER_MIRROR_HOOK: bool = False
 
 
 @lru_cache

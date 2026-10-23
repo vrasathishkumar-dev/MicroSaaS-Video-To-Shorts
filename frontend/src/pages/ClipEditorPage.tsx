@@ -84,6 +84,7 @@ export function ClipEditorPage() {
   const [exportStatus, setExportStatus] = useState<'idle' | 'rendering' | 'ready' | 'failed'>('idle');
   const [isExporting, setIsExporting] = useState(false);
   const [isDownloading, setIsDownloading] = useState(false);
+  const [copyrightSafe, setCopyrightSafe] = useState(true);
 
   const videoRef = useRef<HTMLVideoElement>(null);
   const secondPaneRef = useRef<HTMLVideoElement>(null);
@@ -246,7 +247,7 @@ export function ClipEditorPage() {
 
     setIsExporting(true);
     try {
-      await triggerExport(clip.id);
+      await triggerExport(clip.id, false, copyrightSafe);
       setExportStatus('rendering');
 
       const intervalId = setInterval(async () => {
@@ -363,6 +364,20 @@ export function ClipEditorPage() {
         </div>
 
         <div className="flex items-center gap-3">
+          <label
+            htmlFor="header-copyright-safe-toggle"
+            className="flex items-center gap-1.5 rounded-full border border-emerald-500/40 bg-emerald-500/10 px-3 py-1.5 text-[11px] font-semibold text-emerald-400 cursor-pointer"
+            title="Trims raw hook to <=7.5s, protects audio/video fingerprints, and adds AI commentary voiceover + full-screen B-roll cutaways"
+          >
+            <input
+              id="header-copyright-safe-toggle"
+              type="checkbox"
+              checked={copyrightSafe}
+              onChange={(e) => setCopyrightSafe(e.target.checked)}
+              className="h-3.5 w-3.5 rounded accent-emerald-500 cursor-pointer"
+            />
+            <span>Copyright-Safe Mode</span>
+          </label>
           <ViralityScoreBadge insights={virality} size="md" />
           <button
             type="button"

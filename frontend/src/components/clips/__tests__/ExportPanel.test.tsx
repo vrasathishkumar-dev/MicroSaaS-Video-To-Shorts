@@ -107,4 +107,26 @@ describe('ExportPanel', () => {
 
     expect(mockedTriggerExport).toHaveBeenCalledWith(1, true);
   });
+
+  it('passes copyrightSafe=true when the Copyright-Safe Fair-Use Mode toggle is enabled', async () => {
+    const user = userEvent.setup();
+    mockedGetExportStatus.mockRejectedValueOnce(new Error('no export yet'));
+    mockedTriggerExport.mockResolvedValueOnce({
+      clip_id: 1,
+      status: 'rendering',
+      video_file_path: null,
+      copyright_safe: true,
+    });
+
+    render(<ExportPanel clipId={1} />);
+    const toggle = await screen.findByRole('checkbox', {
+      name: /copyright-safe fair-use mode/i,
+    });
+    await user.click(toggle);
+
+    const exportButton = screen.getByRole('button', { name: /export \(9:16\)/i });
+    await user.click(exportButton);
+
+    expect(mockedTriggerExport).toHaveBeenCalledWith(1, false, true);
+  });
 });

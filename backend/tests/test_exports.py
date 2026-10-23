@@ -170,6 +170,29 @@ class TestExportTrigger:
         assert body["clip_id"] == clip.id
         assert body["below_threshold"] is True
 
+    def test_export_copyright_safe_mode_passes_flag_to_renderer(
+        self, client: TestClient, auth_headers: dict[str, str], db_session: Session, test_user
+    ) -> None:
+        """Passing ?copyright_safe=true enables Fair-Use transformative rendering."""
+        clip = _make_clip(db_session, test_user, virality_score=82.0)
+        called_args: list[tuple[int, bool]] = []
+
+        def _fake_cs_render(clip_id: int, copyright_safe: bool = False) -> None:
+            called_args.append((clip_id, copyright_safe))
+            _fake_render_success(clip_id)
+
+        with patch("app.routers.exports.render_clip", new=_fake_cs_render):
+            response = client.post(
+                f"/api/v1/clips/{clip.id}/export?copyright_safe=true",
+                headers=auth_headers,
+            )
+
+        assert response.status_code == 200
+        body = response.json()
+        assert body["clip_id"] == clip.id
+        assert body["copyright_safe"] is True
+        assert called_args == [(clip.id, True)]
+
 
 class TestExportStatus:
     def test_status_reflects_current_state(

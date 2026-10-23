@@ -81,7 +81,7 @@ async def synthesize_speech(
     if getattr(settings, "OPENAI_API_KEY", None):
         try:
             events, dur = await _synthesize_openai_tts(clean_text, output_path)
-            if dur > 0 and output_path.exists():
+            if dur > 0 and output_path.exists() and output_path.stat().st_size > 500:
                 logger.info("OpenAI TTS synthesis succeeded: %s (%.2fs)", output_path, dur)
                 return output_path, events, dur
         except Exception as exc:
@@ -90,7 +90,7 @@ async def synthesize_speech(
     # 3. Try macOS /usr/bin/say fallback
     try:
         events, dur = _synthesize_macos_say(clean_text, output_path)
-        if dur > 0 and output_path.exists():
+        if dur > 0 and output_path.exists() and output_path.stat().st_size > 500:
             logger.info("macOS say synthesis succeeded: %s (%.2fs)", output_path, dur)
             return output_path, events, dur
     except Exception as exc:

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { AlertCircle, AlertTriangle, Download, Loader2, Zap } from 'lucide-react';
+import { AlertCircle, AlertTriangle, Download, Loader2, ShieldCheck, Zap } from 'lucide-react';
 import { GlassCard } from '@/components/ui/GlassCard';
 import { GradientButton } from '@/components/ui/GradientButton';
 import {
@@ -31,6 +31,7 @@ export function ExportPanel({ clipId, viralityScore }: ExportPanelProps) {
   const [isStarting, setIsStarting] = useState(false);
   const [isDownloading, setIsDownloading] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const [copyrightSafe, setCopyrightSafe] = useState(false);
 
   // Score Gate dialog state
   const [showGateDialog, setShowGateDialog] = useState(false);
@@ -112,7 +113,11 @@ export function ExportPanel({ clipId, viralityScore }: ExportPanelProps) {
     setErrorMessage(null);
     setIsStarting(true);
     try {
-      const data = force ? await triggerExport(clipId, true) : await triggerExport(clipId);
+      const data = copyrightSafe
+        ? await triggerExport(clipId, force, true)
+        : force
+          ? await triggerExport(clipId, true)
+          : await triggerExport(clipId);
       applyStatus(data);
       if (data.status === 'rendering' || data.status === 'idle') {
         setStatus('rendering');
@@ -181,6 +186,34 @@ export function ExportPanel({ clipId, viralityScore }: ExportPanelProps) {
         <div>
           <span className="text-muted-foreground block text-[10px]">Audio</span>
           <span className="font-semibold text-foreground">Stereo AAC 48kHz</span>
+        </div>
+      </div>
+
+      {/* Copyright-Safe / Fair-Use Transformative Mode Toggle */}
+      <div className="rounded-xl border border-emerald-500/30 bg-emerald-500/5 p-3.5 space-y-2">
+        <div className="flex items-center justify-between gap-3">
+          <div className="flex items-center gap-2">
+            <ShieldCheck className="h-4 w-4 text-emerald-400 shrink-0" />
+            <div>
+              <label
+                htmlFor={`copyright-safe-toggle-${clipId}`}
+                className="text-xs font-semibold text-foreground cursor-pointer"
+              >
+                Copyright-Safe Fair-Use Mode (Anti-Content ID)
+              </label>
+              <p className="text-[11px] text-muted-foreground">
+                Cuts raw hook to &le;7.5s, protects audio/video fingerprints, and adds AI commentary voiceover + full-screen B-roll.
+              </p>
+            </div>
+          </div>
+          <input
+            id={`copyright-safe-toggle-${clipId}`}
+            type="checkbox"
+            checked={copyrightSafe}
+            onChange={(e) => setCopyrightSafe(e.target.checked)}
+            aria-label="Copyright-Safe Fair-Use Mode"
+            className="h-4 w-4 rounded border-glass-border accent-emerald-500 cursor-pointer"
+          />
         </div>
       </div>
 

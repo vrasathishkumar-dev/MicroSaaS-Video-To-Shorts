@@ -164,7 +164,7 @@ _FONT_FILE_CANDIDATES = (
 )
 
 
-def render_clip(clip_id: int) -> None:
+def render_clip(clip_id: int, copyright_safe: bool = False) -> None:
     """Render the clip with id `clip_id` to an upload-ready 9:16 MP4 and
     persist the result.
 
@@ -190,7 +190,9 @@ def render_clip(clip_id: int) -> None:
             logger.error("render_clip: clip id=%s no longer exists; aborting", clip_id)
             return
 
-        _render_and_persist(session, fresh_clip)
+        _render_and_persist(
+            session, fresh_clip, copyright_safe=copyright_safe
+        )
     except Exception:
         logger.exception("render_clip: unhandled error rendering clip id=%s", clip_id)
         _mark_failed_best_effort(session, clip_id)
@@ -214,7 +216,9 @@ def _mark_failed_best_effort(session: Session, clip_id: int) -> None:
         )
 
 
-def _render_and_persist(session: Session, clip: Clip) -> None:
+def _render_and_persist(
+    session: Session, clip: Clip, *, copyright_safe: bool = False
+) -> None:
     """Validate inputs, run ffmpeg, and update `clip` with the outcome."""
 
     video_project = clip.video_project
@@ -264,21 +268,42 @@ def _render_and_persist(session: Session, clip: Clip) -> None:
     )
 
     framing_mode_str = _framing_mode(clip)
+    use_copyright_safe = bool(copyright_safe or settings.RENDER_COPYRIGHT_SAFE)
 
     try:
         with tempfile.TemporaryDirectory(prefix="render_") as tmp_dir:
-            speaker_framing_result = _run_ffmpeg(
-                source_path=source_path,
-                start_time=clip.start_time,
-                duration=duration,
-                captions=captions,
-                broll_assets=list(clip.broll_assets),
-                output_path=output_path,
-                tmp_dir=Path(tmp_dir),
-                framing=framing_mode_str,
-                caption_style=clip.caption_style,
-                broll_placement=clip.broll_placement,
-            )
+            if use_copyright_safe:
+                from app.services.copyright_protection import (
+                    render_copyright_safe_clip,
+                )
+
+                speaker_framing_result = render_copyright_safe_clip(
+                    source_path=source_path,
+                    start_time=clip.start_time,
+                    duration=duration,
+                    clip_title=clip.title,
+                    caption_text=clip.caption_text,
+                    transcript_segments=transcript_segments,
+                    broll_assets=list(clip.broll_assets),
+                    output_path=output_path,
+                    tmp_dir=Path(tmp_dir),
+                    framing=framing_mode_str,
+                    caption_style=clip.caption_style,
+                    broll_placement=clip.broll_placement,
+                )
+            else:
+                speaker_framing_result = _run_ffmpeg(
+                    source_path=source_path,
+                    start_time=clip.start_time,
+                    duration=duration,
+                    captions=captions,
+                    broll_assets=list(clip.broll_assets),
+                    output_path=output_path,
+                    tmp_dir=Path(tmp_dir),
+                    framing=framing_mode_str,
+                    caption_style=clip.caption_style,
+                    broll_placement=clip.broll_placement,
+                )
     except FileNotFoundError:
         logger.error(
             "render_clip: clip id=%s failed -- ffmpeg is not installed on this machine",
@@ -951,8 +976,8 @@ def _apply_broll(
     half_height = height // 2
 
     if placement == BrollPlacement.split:
-        # The main video is placed in the top half (preserving natural 1:1 aspect
-        # ratio without vertical squashing) and the bottom half is padded as black canvas for B-roll.
+        # Main video sits in the top half (preserving natural 1:1 aspect ratio)
+        # and the bottom half is padded as black canvas for B-roll.
         video_stream = (
             video_stream.filter("crop", width, half_height, 0, 0)
             .filter("pad", width, height, 0, 0, color="black")

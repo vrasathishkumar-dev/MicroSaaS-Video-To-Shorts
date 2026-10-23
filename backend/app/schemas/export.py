@@ -22,6 +22,7 @@ class ExportStatusResponse(BaseModel):
     video_file_path: str | None = None
     virality_score: float | None = None
     below_threshold: bool = False
+    copyright_safe: bool = False
 
     model_config = ConfigDict(from_attributes=True)
 

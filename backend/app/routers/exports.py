@@ -114,6 +114,15 @@ async def export_clip(
             "when a clip scores below the virality threshold (50.0)."
         ),
     ),
+    copyright_safe: bool = Query(
+        False,
+        description=(
+            "Set true to render in Copyright-Safe / Fair-Use Transformative "
+            "mode (trims raw hook to <=7.5s, applies audio/visual fingerprint "
+            "protection, and appends original AI commentary voiceover over "
+            "full-screen B-roll cutaways)."
+        ),
+    ),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ) -> ExportStatusResponse:
@@ -161,7 +170,11 @@ async def export_clip(
     db.commit()
     db.refresh(clip)
 
-    task_queue.enqueue(background_tasks, render_clip, clip.id)
+    effective_copyright_safe = bool(copyright_safe or settings.RENDER_COPYRIGHT_SAFE)
+    if copyright_safe:
+        task_queue.enqueue(background_tasks, render_clip, clip.id, True)
+    else:
+        task_queue.enqueue(background_tasks, render_clip, clip.id)
 
     return ExportStatusResponse(
         clip_id=clip.id,
@@ -169,6 +182,7 @@ async def export_clip(
         video_file_path=clip.video_file_path,
         virality_score=clip.virality_score,
         below_threshold=below_threshold,
+        copyright_safe=effective_copyright_safe,
     )
 
 

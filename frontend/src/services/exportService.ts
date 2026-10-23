@@ -8,6 +8,7 @@ export interface ExportStatusResponse {
   video_file_path: string | null;
   virality_score?: number | null;
   below_threshold?: boolean;
+  copyright_safe?: boolean;
 }
 
 export interface ScoreGateErrorDetail {
@@ -36,8 +37,13 @@ export function isScoreGateError(
 export async function triggerExport(
   clipId: number,
   force: boolean = false,
+  copyrightSafe: boolean = false,
 ): Promise<ExportStatusResponse> {
-  const query = force ? '?force=true' : '';
+  const params = new URLSearchParams();
+  if (force) params.set('force', 'true');
+  if (copyrightSafe) params.set('copyright_safe', 'true');
+  const queryString = params.toString();
+  const query = queryString ? `?${queryString}` : '';
   const { data } = await api.post<ExportStatusResponse>(
     `/clips/${clipId}/export${query}`,
   );
