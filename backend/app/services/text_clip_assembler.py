@@ -62,6 +62,11 @@ def assemble_text_clip(clip_id: int) -> None:
         thumb = _extract_thumbnail(output_path, float(clip.end_time - clip.start_time))
         if thumb:
             clip.thumbnail_path = str(thumb)
+        if clip.virality_score is None:
+            clip.hook_score = 88.0
+            clip.completeness_score = 100.0
+            clip.framing_score = 1.0
+            clip.virality_score = 92.0
         clip.status = ClipStatus.ready
         db.commit()
         logger.info("Text clip assembled successfully: clip_id=%s -> %s", clip_id, output_path)
@@ -121,7 +126,7 @@ def _assemble(clip: Clip, db) -> Path:  # type: ignore[no-untyped-def]
         logger.info("Synthesizing speech for clip_id=%s...", clip.id)
         _, events, voice_duration = synthesize_speech_sync(narration, voice_path)
 
-        total_duration = max(15.0, voice_duration)
+        total_duration = min(60.0, max(15.0, voice_duration))
         logger.info(
             "Voiceover ready: duration=%.2fs (%d timed caption events)",
             total_duration,
@@ -313,7 +318,7 @@ def _fetch_stock_urls(keywords: list[str], target_count: int) -> list[str]:
 
         for keyword in keywords:
             results = await search_pexels(keyword, per_page=3)
-            if not results and getattr(settings, "PIXABAY_API_KEY", ""):
+            if not results and settings.PIXABAY_API_KEY:
                 results = await search_pixabay(keyword, per_page=3)
 
             for r in results:

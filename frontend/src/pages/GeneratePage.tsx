@@ -20,7 +20,9 @@ import {
   Rows2,
   PictureInPicture2,
   PanelTop,
+  PlaySquare,
 } from 'lucide-react';
+import { YouTubeCaptionPanel } from '@/components/clips/YouTubeCaptionPanel';
 import { GlassCard } from '@/components/ui/GlassCard';
 import { GradientButton } from '@/components/ui/GradientButton';
 import { PageWrapper } from '@/components/ui/PageWrapper';
@@ -391,7 +393,7 @@ export function GeneratePage() {
                   <div>
                     <h4 className="text-xs font-bold text-foreground">Auto-source HD B-Roll</h4>
                     <p className="text-[11px] text-muted-foreground">
-                      Pulls free high-quality stock clips from Pexels & Pixabay
+                      Pulls free high-quality stock clips from Pexels &amp; Pixabay
                     </p>
                   </div>
                 </div>
@@ -462,7 +464,7 @@ export function GeneratePage() {
                 {isSubmitting ? (
                   <>
                     <Loader2 className="h-4 w-4 animate-spin" />
-                    Generating Script & Starting Pipeline...
+                    Generating Script &amp; Starting Pipeline...
                   </>
                 ) : (
                   <>
@@ -557,7 +559,7 @@ export function GeneratePage() {
                   />
                 </div>
                 <div className="flex justify-between text-[11px] text-muted-foreground">
-                  <span>Script & B-roll Assembly</span>
+                  <span>Script &amp; B-roll Assembly</span>
                   <span>
                     {activeClips.filter((c) => c.status === 'ready').length} of {activeClips.length} ready
                   </span>
@@ -645,17 +647,17 @@ export function GeneratePage() {
                                   <button
                                     type="button"
                                     onClick={() => setPreviewClip(clip)}
-                                    className="inline-flex items-center gap-1 rounded-lg bg-primary/15 px-2.5 py-1 text-xs font-semibold text-primary transition-all hover:bg-primary/25"
+                                    className="inline-flex items-center gap-1 rounded-lg bg-primary/15 px-2.5 py-1 text-xs font-semibold text-primary transition-all hover:bg-primary/25 cursor-pointer"
                                   >
                                     <Play className="h-3 w-3 fill-current" />
-                                    Preview
+                                    Preview &amp; Caption
                                   </button>
                                   <button
                                     type="button"
-                                    onClick={() => navigate(`/clips/${clip.id}`)}
-                                    className="inline-flex items-center gap-1 rounded-lg border border-glass-border px-2.5 py-1 text-xs font-medium text-foreground/80 transition-all hover:text-foreground"
+                                    onClick={() => navigate(`/clips/${clip.id}?tab=youtube`)}
+                                    className="inline-flex items-center gap-1 rounded-lg border border-glass-border px-2.5 py-1 text-xs font-medium text-foreground/80 transition-all hover:text-foreground cursor-pointer"
                                   >
-                                    Edit
+                                    Studio
                                     <ChevronRight className="h-3 w-3" />
                                   </button>
                                 </>
@@ -673,53 +675,65 @@ export function GeneratePage() {
         </div>
       </div>
 
-      {/* ── Preview Video Modal ── */}
+      {/* ── Preview Video & YouTube Caption Modal ── */}
       {previewClip && (
         <div
-          className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm p-4"
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm p-4 overflow-y-auto"
           onClick={() => setPreviewClip(null)}
         >
           <div
-            className="relative w-full max-w-sm rounded-2xl border border-glass-border bg-glass-bg/95 p-4 shadow-2xl backdrop-blur-xl"
+            className="relative w-full max-w-4xl rounded-2xl border border-glass-border bg-glass-bg/95 p-5 shadow-2xl backdrop-blur-xl my-8"
             onClick={(e) => e.stopPropagation()}
           >
-            <div className="flex items-center justify-between mb-3">
-              <h3 className="text-sm font-bold text-foreground truncate">{previewClip.title}</h3>
+            <div className="flex items-center justify-between mb-4 border-b border-glass-border pb-3">
+              <div className="flex items-center gap-2">
+                <PlaySquare className="h-4 w-4 text-rose-500" />
+                <h3 className="text-sm font-bold text-foreground truncate">
+                  {previewClip.title} — Content &amp; YouTube Caption Preview
+                </h3>
+              </div>
               <button
                 type="button"
                 onClick={() => setPreviewClip(null)}
-                className="text-xs text-muted-foreground hover:text-foreground p-1"
+                className="text-xs text-muted-foreground hover:text-foreground p-1 cursor-pointer"
               >
                 ✕ Close
               </button>
             </div>
 
-            <div className="aspect-[9/16] w-full overflow-hidden rounded-xl bg-black flex items-center justify-center">
-              <video
-                src={getClipPreviewUrl(previewClip.id)}
-                controls
-                autoPlay
-                className="h-full w-full object-contain"
-              />
-            </div>
+            <div className="grid grid-cols-1 md:grid-cols-12 gap-5 items-start">
+              <div className="md:col-span-5 flex flex-col items-center">
+                <div className="aspect-[9/16] w-full max-w-[280px] overflow-hidden rounded-xl bg-black flex items-center justify-center">
+                  <video
+                    src={getClipPreviewUrl(previewClip.id)}
+                    controls
+                    autoPlay
+                    className="h-full w-full object-contain"
+                  />
+                </div>
 
-            <div className="mt-3 flex items-center justify-between">
-              <a
-                href={getClipPreviewUrl(previewClip.id)}
-                download={`${previewClip.title.replace(/\s+/g, '_')}.mp4`}
-                className="inline-flex items-center gap-1.5 text-xs font-semibold text-primary hover:underline"
-              >
-                <Download className="h-3.5 w-3.5" />
-                Download 9:16 MP4
-              </a>
-              <button
-                type="button"
-                onClick={() => navigate(`/clips/${previewClip.id}`)}
-                className="inline-flex items-center gap-1 text-xs font-medium text-muted-foreground hover:text-foreground"
-              >
-                Open in Editor
-                <ExternalLink className="h-3 w-3" />
-              </button>
+                <div className="mt-3 flex w-full max-w-[280px] items-center justify-between">
+                  <a
+                    href={getClipPreviewUrl(previewClip.id)}
+                    download={`${previewClip.title.replace(/\s+/g, '_')}.mp4`}
+                    className="inline-flex items-center gap-1.5 text-xs font-semibold text-primary hover:underline"
+                  >
+                    <Download className="h-3.5 w-3.5" />
+                    Download 9:16 MP4
+                  </a>
+                  <button
+                    type="button"
+                    onClick={() => navigate(`/clips/${previewClip.id}?tab=youtube`)}
+                    className="inline-flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground cursor-pointer"
+                  >
+                    Open in Clip Studio &rarr;
+                  </button>
+                </div>
+              </div>
+
+              <div className="md:col-span-7">
+                <YouTubeCaptionPanel clipId={previewClip.id} />
+              </div>
             </div>
           </div>
         </div>

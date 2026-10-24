@@ -12,8 +12,9 @@ import {
   Maximize2,
   Layers,
   Loader2,
+  PlaySquare,
 } from 'lucide-react';
-import { useParams, Link } from 'react-router-dom';
+import { useParams, Link, useSearchParams } from 'react-router-dom';
 import { BrollPanel } from '@/components/clips/BrollPanel';
 import { CaptionEditor } from '@/components/clips/CaptionEditor';
 import { CaptionStyleSelector } from '@/components/clips/CaptionStyleSelector';
@@ -21,6 +22,7 @@ import { ExportPanel } from '@/components/clips/ExportPanel';
 import { TextBasedTrimmer } from '@/components/clips/TextBasedTrimmer';
 import { TrimControls } from '@/components/clips/TrimControls';
 import { ViralityScoreBadge } from '@/components/clips/ViralityScoreBadge';
+import { YouTubeCaptionPanel } from '@/components/clips/YouTubeCaptionPanel';
 import { GlassCard } from '@/components/ui/GlassCard';
 import { PageWrapper } from '@/components/ui/PageWrapper';
 import { CAPTION_PREVIEW_STYLES, activeCaptionFrame } from '@/lib/captions';
@@ -62,9 +64,29 @@ import type {
 
 export type { FramingMode };
 
+type StudioTab = 'captions' | 'trim' | 'broll' | 'youtube' | 'export';
+
+const STUDIO_TABS: Array<{ id: StudioTab; label: string; icon: typeof Sparkles }> = [
+  { id: 'captions', label: 'Captions & Style', icon: Sparkles },
+  { id: 'trim', label: 'Trim Timeline', icon: Sliders },
+  { id: 'broll', label: 'B-Roll Media', icon: Film },
+  { id: 'youtube', label: 'YouTube Caption', icon: PlaySquare },
+  { id: 'export', label: 'Render & Export', icon: Download },
+];
+
 export function ClipEditorPage() {
   const { id } = useParams<{ id: string }>();
+  const [searchParams] = useSearchParams();
   const clipId = id ? Number(id) : NaN;
+
+  const initialTabParam = searchParams.get('tab');
+  const initialTab: StudioTab =
+    initialTabParam === 'youtube' ||
+    initialTabParam === 'export' ||
+    initialTabParam === 'trim' ||
+    initialTabParam === 'broll'
+      ? initialTabParam
+      : 'captions';
 
   const [clip, setClip] = useState<Clip | null>(null);
   const [transcriptSegments, setTranscriptSegments] = useState<TranscriptSegment[]>([]);
@@ -76,7 +98,7 @@ export function ClipEditorPage() {
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [previewFailed, setPreviewFailed] = useState(false);
-  const [activeTab, setActiveTab] = useState<'captions' | 'trim' | 'broll' | 'export'>('captions');
+  const [activeTab, setActiveTab] = useState<StudioTab>(initialTab);
   const [captionPreset, setCaptionPreset] = useState<CaptionStylePreset>('hormozi');
   const [isPlaying, setIsPlaying] = useState(false);
   const [currentTime, setCurrentTime] = useState(0);
@@ -142,6 +164,7 @@ export function ClipEditorPage() {
   const clipStart = clip?.start_time;
   const clipEnd = clip?.end_time;
   const clipStatus = clip?.status;
+  const clipCaptionText = clip?.caption_text;
   useEffect(() => {
     if (!Number.isFinite(clipId) || clipStart === undefined) return;
     let current = true;
@@ -170,7 +193,7 @@ export function ClipEditorPage() {
     return () => {
       current = false;
     };
-  }, [clipId, clipStart, clipEnd, clipStatus, captionPreset]);
+  }, [clipId, clipStart, clipEnd, clipStatus, captionPreset, clipCaptionText]);
 
   const saveRenderChoice = async (payload: UpdateClipPayload) => {
     if (!clip) return;
@@ -237,7 +260,10 @@ export function ClipEditorPage() {
       try {
         await downloadClip(clip.id);
       } catch (err: unknown) {
-        const msg = err instanceof Error ? err.message : 'Failed to download video file. Please try again.';
+        const msg =
+          err instanceof Error
+            ? err.message
+            : 'Failed to download video file. Please try again.';
         setError(msg);
       } finally {
         setIsDownloading(false);
@@ -313,9 +339,10 @@ export function ClipEditorPage() {
   const virality = clipToViralityInsights(clip);
   const isRenderedClip = clip.status === 'ready' && Boolean(clip.video_file_path);
 
-  const relativeTime = clip.status === 'ready' ? currentTime : Math.max(0, currentTime - clip.start_time);
+  const relativeTime =
+    clip.status === 'ready' ? currentTime : Math.max(0, currentTime - clip.start_time);
   const activeBroll = brollAssets.find(
-    (b) => relativeTime >= b.position_start && relativeTime <= b.position_end
+    (b) => relativeTime >= b.position_start && relativeTime <= b.position_end,
   );
 
   const speakerWindow =
@@ -363,7 +390,21 @@ export function ClipEditorPage() {
           <h1 className="text-2xl font-bold text-foreground">{clip.title}</h1>
         </div>
 
-        <div className="flex items-center gap-3">
+        <div className="flex flex-wrap items-center gap-3">
+          <button
+            type="button"
+            onClick={() => setActiveTab('youtube')}
+            className={cn(
+              'flex items-center gap-1.5 rounded-full border px-3.5 py-1.5 text-xs font-semibold transition-all cursor-pointer',
+              activeTab === 'youtube'
+                ? 'border-rose-500 bg-rose-500/20 text-rose-300'
+                : 'border-rose-500/40 bg-rose-500/10 text-rose-300 hover:bg-rose-500/20',
+            )}
+          >
+            <PlaySquare className="h-3.5 w-3.5 text-rose-400" />
+            <span>YouTube Caption &amp; Content</span>
+          </button>
+
           <label
             htmlFor="header-copyright-safe-toggle"
             className="flex items-center gap-1.5 rounded-full border border-emerald-500/40 bg-emerald-500/10 px-3 py-1.5 text-[11px] font-semibold text-emerald-400 cursor-pointer"
@@ -384,11 +425,11 @@ export function ClipEditorPage() {
             onClick={handleHeaderExportAndDownload}
             disabled={isExporting || isDownloading}
             className={cn(
-              "flex items-center gap-1.5 rounded-full px-4 py-2 text-xs font-bold text-white shadow-lg transition-all cursor-pointer",
+              'flex items-center gap-1.5 rounded-full px-4 py-2 text-xs font-bold text-white shadow-lg transition-all cursor-pointer',
               exportStatus === 'ready'
-                ? "bg-gradient-to-r from-emerald-500 to-teal-500 hover:opacity-90 animate-pulse"
-                : "bg-gradient-to-r from-gradient-from to-gradient-to hover:opacity-90",
-              (isExporting || isDownloading) && "opacity-75 cursor-wait"
+                ? 'bg-gradient-to-r from-emerald-500 to-teal-500 hover:opacity-90 animate-pulse'
+                : 'bg-gradient-to-r from-gradient-from to-gradient-to hover:opacity-90',
+              (isExporting || isDownloading) && 'opacity-75 cursor-wait',
             )}
           >
             {isExporting ? (
@@ -429,7 +470,7 @@ export function ClipEditorPage() {
                 'flex items-center gap-1 px-3 py-1 rounded-full transition-all',
                 framingMode === 'speaker_focus'
                   ? 'bg-primary text-white shadow-sm'
-                  : 'text-muted-foreground hover:text-foreground'
+                  : 'text-muted-foreground hover:text-foreground',
               )}
             >
               <UserCheck className="h-3 w-3" />
@@ -442,7 +483,7 @@ export function ClipEditorPage() {
                 'flex items-center gap-1 px-3 py-1 rounded-full transition-all',
                 framingMode === 'dynamic_blur'
                   ? 'bg-primary text-white shadow-sm'
-                  : 'text-muted-foreground hover:text-foreground'
+                  : 'text-muted-foreground hover:text-foreground',
               )}
             >
               <Layers className="h-3 w-3" />
@@ -455,7 +496,7 @@ export function ClipEditorPage() {
                 'flex items-center gap-1 px-3 py-1 rounded-full transition-all',
                 framingMode === 'fit'
                   ? 'bg-primary text-white shadow-sm'
-                  : 'text-muted-foreground hover:text-foreground'
+                  : 'text-muted-foreground hover:text-foreground',
               )}
             >
               <Maximize2 className="h-3 w-3" />
@@ -488,7 +529,7 @@ export function ClipEditorPage() {
                 <div
                   className={cn(
                     'absolute inset-0 flex flex-col',
-                    framingMode === 'dynamic_blur' && !isRenderedClip && 'z-10'
+                    framingMode === 'dynamic_blur' && !isRenderedClip && 'z-10',
                   )}
                 >
                   <div
@@ -515,7 +556,7 @@ export function ClipEditorPage() {
                             ? 'object-cover'
                             : framingMode === 'speaker_focus'
                               ? 'h-full w-full object-cover object-center'
-                              : 'h-full w-full object-contain'
+                              : 'h-full w-full object-contain',
                       )}
                       onError={() => setPreviewFailed(true)}
                       onPlay={(event) => {
@@ -646,9 +687,7 @@ export function ClipEditorPage() {
 
                   <span className="font-mono text-[11px] text-muted-foreground">
                     {currentTime.toFixed(1)}s /{' '}
-                    {isRenderedClip
-                      ? duration.toFixed(1)
-                      : clip.end_time.toFixed(1)}s
+                    {isRenderedClip ? duration.toFixed(1) : clip.end_time.toFixed(1)}s
                   </span>
 
                   <button
@@ -677,26 +716,21 @@ export function ClipEditorPage() {
 
         {/* Right: Studio Editing Tabs */}
         <div className="lg:col-span-7 space-y-5">
-          <div className="flex gap-2 rounded-xl bg-muted/60 p-1.5 border border-glass-border">
-            {[
-              { id: 'captions', label: 'Captions & Style', icon: Sparkles },
-              { id: 'trim', label: 'Trim Timeline', icon: Sliders },
-              { id: 'broll', label: 'B-Roll Media', icon: Film },
-              { id: 'export', label: 'Render & Export', icon: Download },
-            ].map((tab) => (
+          <div className="flex flex-wrap gap-1.5 rounded-xl bg-muted/60 p-1.5 border border-glass-border">
+            {STUDIO_TABS.map((tab) => (
               <button
                 key={tab.id}
                 type="button"
-                onClick={() => setActiveTab(tab.id as any)}
+                onClick={() => setActiveTab(tab.id)}
                 className={cn(
-                  'flex-1 flex items-center justify-center gap-1.5 rounded-lg py-2 text-xs font-semibold transition-all',
+                  'flex-1 min-w-[115px] flex items-center justify-center gap-1.5 rounded-lg py-2 px-2 text-xs font-semibold transition-all cursor-pointer',
                   activeTab === tab.id
                     ? 'bg-background text-foreground shadow-sm'
                     : 'text-muted-foreground hover:text-foreground',
                 )}
               >
-                <tab.icon className="h-3.5 w-3.5" />
-                {tab.label}
+                <tab.icon className="h-3.5 w-3.5 shrink-0" />
+                <span>{tab.label}</span>
               </button>
             ))}
           </div>
@@ -757,9 +791,24 @@ export function ClipEditorPage() {
             />
           )}
 
+          {activeTab === 'youtube' && (
+            <YouTubeCaptionPanel
+              clipId={clip.id}
+              onCaptionApplied={(newText) => {
+                setClip((prev) => (prev ? { ...prev, caption_text: newText } : prev));
+              }}
+            />
+          )}
+
           {activeTab === 'export' && (
             <div className="space-y-5">
-              <ExportPanel clipId={clip.id} viralityScore={clip.virality_score} />
+              <ExportPanel
+                clipId={clip.id}
+                viralityScore={clip.virality_score}
+                onCaptionApplied={(newText) => {
+                  setClip((prev) => (prev ? { ...prev, caption_text: newText } : prev));
+                }}
+              />
 
               <GlassCard>
                 <ViralityScoreBadge insights={virality} showDetails size="lg" />

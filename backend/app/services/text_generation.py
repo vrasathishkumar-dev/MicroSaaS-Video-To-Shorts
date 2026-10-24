@@ -214,7 +214,7 @@ def _openai_generate(
             if not base_url:
                 kwargs["response_format"] = {"type": "json_object"}
 
-            response = client.chat.completions.create(**kwargs)  # type: ignore[arg-type]
+            response = client.chat.completions.create(**kwargs)  # type: ignore[arg-type, call-overload]
             raw = _extract_json_payload(response.choices[0].message.content or "[]")
             break
         except Exception as exc:
@@ -409,12 +409,14 @@ def _heuristic_generate(
                     if shorts_count > 1
                     else str(story["title"])
                 )
+                raw_kws = story.get("keywords")
+                kw_list = [str(k) for k in raw_kws] if isinstance(raw_kws, list) else []
                 segments.append(
                     ScriptSegment(
                         index=i,
                         title=part_title,
                         narration=str(story["narration"]),
-                        keywords=[str(k) for k in story["keywords"]],
+                        keywords=kw_list,
                         duration_seconds=30.0,
                     )
                 )

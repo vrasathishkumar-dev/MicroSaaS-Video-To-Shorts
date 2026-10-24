@@ -103,9 +103,8 @@ def fetch_subtitles_via_ytdlp(url: str, target_dir: Path, filename_stem: str) ->
         "nocheckcertificate": True,
         "socket_timeout": 15,
     }
-    with contextlib.suppress(Exception):
-        with yt_dlp.YoutubeDL(sub_opts) as sub_ydl:
-            sub_ydl.download([url])
+    with contextlib.suppress(Exception), yt_dlp.YoutubeDL(sub_opts) as sub_ydl:
+        sub_ydl.download([url])
     candidates = sorted(target_dir.glob(f"{filename_stem}*.vtt"))
     return candidates[0] if candidates else None
 

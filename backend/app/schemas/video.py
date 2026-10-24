@@ -8,6 +8,8 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from app.models.clip import BrollPlacement, ClipCaptionStyle, ClipFraming
 from app.models.video_project import ClipLength, SourceType, VideoProjectStatus
+from app.schemas.clip import ClipResponse
+from app.schemas.export import YouTubeCaptionPackageResponse
 
 
 class VideoProjectCreate(BaseModel):
@@ -85,3 +87,11 @@ class PaginatedVideoProjects(BaseModel):
     total: int
     page: int
     page_size: int
+
+
+class UploadShortResponse(BaseModel):
+    """Response returned when uploading a Short video directly to generate captions & preview."""
+
+    project: VideoProjectResponse
+    clip: ClipResponse
+    youtube_package: YouTubeCaptionPackageResponse

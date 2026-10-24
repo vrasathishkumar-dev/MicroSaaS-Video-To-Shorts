@@ -59,9 +59,12 @@ def compute_hook_duration(
     Keeps only the opening hook of the third-party video (typically 4-7.5s)
     rather than 35-50s of uninterrupted source audio.
     """
-    cap = max_hook_seconds or getattr(
-        settings, "RENDER_HOOK_MAX_SECONDS", DEFAULT_MAX_HOOK_SECONDS
+    raw_cap = (
+        max_hook_seconds
+        if max_hook_seconds is not None
+        else getattr(settings, "RENDER_HOOK_MAX_SECONDS", DEFAULT_MAX_HOOK_SECONDS)
     )
+    cap: float = float(raw_cap if raw_cap is not None else DEFAULT_MAX_HOOK_SECONDS)
     if clip_duration <= 0:
         return MIN_HOOK_SECONDS
 
@@ -399,7 +402,8 @@ def render_copyright_safe_clip(
     _, commentary_events, raw_voice_dur = synthesize_speech_sync(
         commentary_script, raw_voice_path
     )
-    commentary_duration = max(3.5, round(raw_voice_dur, 2))
+    max_commentary = max(3.5, round(60.0 - hook_duration, 2))
+    commentary_duration = min(max_commentary, max(3.5, round(raw_voice_dur, 2)))
 
     # 3. Render Hook Video (0 -> hook_duration) with visual fingerprint transform
     hook_input = ffmpeg.input(source_path, ss=start_time, t=hook_duration)

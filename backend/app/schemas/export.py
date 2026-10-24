@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
 from app.models.clip import ClipCaptionStyle, ClipStatus
 
@@ -107,3 +107,55 @@ class ClipCaptionsResponse(BaseModel):
     clip_id: int
     style: ClipCaptionStyle
     events: list[CaptionFrame] = []
+
+
+class YouTubeTimedCaption(BaseModel):
+    """One timed caption line in the YouTube Shorts content preview."""
+
+    start_time: float
+    end_time: float
+    timestamp_label: str
+    text: str
+
+
+class YouTubeSpecsCheck(BaseModel):
+    """YouTube Shorts technical readiness and specification summary."""
+
+    is_youtube_short_ready: bool
+    aspect_ratio: str
+    resolution: str
+    fps: int
+    duration_seconds: float
+    max_duration_seconds: float
+    video_codec: str
+    audio_codec: str
+    has_burned_captions: bool
+    caption_style: str
+    framing_mode: str
+    broll_count: int
+    status: str
+
+
+class YouTubeCaptionRequest(BaseModel):
+    """Optional configuration when generating/regenerating YouTube Shorts captions."""
+
+    tone: Literal["viral", "educational", "storytelling", "professional"] = "viral"
+    include_hashtags: bool = True
+    include_timestamps: bool = True
+    custom_caption_text: str | None = Field(default=None, max_length=4000)
+    apply_caption_to_clip: bool = False
+
+
+class YouTubeCaptionPackageResponse(BaseModel):
+    """Complete YouTube Shorts upload metadata, captions, and content preview package."""
+
+    clip_id: int
+    tone: str
+    youtube_title: str
+    youtube_description: str
+    hashtags: list[str]
+    tags: list[str]
+    caption_text: str
+    timed_captions: list[YouTubeTimedCaption]
+    srt_content: str
+    specs_check: YouTubeSpecsCheck

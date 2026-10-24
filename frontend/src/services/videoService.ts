@@ -8,8 +8,10 @@ import type {
   FramingMode,
   PaginatedResponse,
   TranscriptSegment,
+  UploadShortResponse,
   VideoProject,
   VideoSourceType,
+  YouTubeCaptionTone,
 } from '@/types';
 
 /** Payload accepted by `submitVideo`. Exactly one of `file`/`sourceUrl` is required. */
@@ -26,6 +28,18 @@ export interface SubmitVideoPayload {
   brollPlacement?: BrollPlacement;
   /** When true, automatically generates clips, adds B-roll, and renders 9:16 MP4s. */
   autoProduce?: boolean;
+}
+
+export interface UploadShortPayload {
+  file: File;
+  title?: string;
+  captionText?: string;
+  tone?: YouTubeCaptionTone;
+  framingMode?: FramingMode;
+  captionStyle?: CaptionStylePreset;
+  autoBroll?: boolean;
+  brollPlacement?: BrollPlacement;
+  autoRender?: boolean;
 }
 
 /** Fetch a page of the current user's video projects. */
@@ -63,9 +77,6 @@ export async function submitVideo(
   if (payload.sourceUrl) {
     formData.append('source_url', payload.sourceUrl);
   }
-  // What the shorts should come out as. Sent at submission because the
-  // length decides how the highlights are cut, and the rest become every
-  // generated clip's own settings (still editable per clip afterwards).
   formData.append('target_clip_length', payload.targetClipLength);
   formData.append('framing_mode', payload.framingMode);
   formData.append('caption_style', payload.captionStyle);
@@ -80,6 +91,37 @@ export async function submitVideo(
   const { data } = await api.post<VideoProject>('/videos', formData, {
     onUploadProgress,
   });
+  return data;
+}
+
+/**
+ * Upload an existing Short video directly to extract/generate YouTube captions,
+ * see the spoken & timed subtitle content, and prepare a 9:16 export.
+ */
+export async function uploadShortVideo(
+  payload: UploadShortPayload,
+  onUploadProgress?: (progressEvent: AxiosProgressEvent) => void,
+): Promise<UploadShortResponse> {
+  const formData = new FormData();
+  formData.append('file', payload.file);
+  if (payload.title) {
+    formData.append('title', payload.title);
+  }
+  if (payload.captionText) {
+    formData.append('caption_text', payload.captionText);
+  }
+  formData.append('tone', payload.tone ?? 'viral');
+  formData.append('framing_mode', payload.framingMode ?? 'speaker_focus');
+  formData.append('caption_style', payload.captionStyle ?? 'hormozi');
+  formData.append('auto_broll', String(payload.autoBroll ?? false));
+  formData.append('broll_placement', payload.brollPlacement ?? 'bottom');
+  formData.append('auto_render', String(payload.autoRender ?? true));
+
+  const { data } = await api.post<UploadShortResponse>(
+    '/videos/upload-short',
+    formData,
+    { onUploadProgress },
+  );
   return data;
 }
 

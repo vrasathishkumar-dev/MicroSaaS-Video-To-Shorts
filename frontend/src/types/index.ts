@@ -199,6 +199,62 @@ export interface BrollAsset {
   position_end: number;
 }
 
+export type YouTubeCaptionTone =
+  | 'viral'
+  | 'educational'
+  | 'storytelling'
+  | 'professional';
+
+export interface YouTubeTimedCaption {
+  start_time: number;
+  end_time: number;
+  timestamp_label: string;
+  text: string;
+}
+
+export interface YouTubeSpecsCheck {
+  is_youtube_short_ready: boolean;
+  aspect_ratio: string;
+  resolution: string;
+  fps: number;
+  duration_seconds: number;
+  max_duration_seconds: number;
+  video_codec: string;
+  audio_codec: string;
+  has_burned_captions: boolean;
+  caption_style: string;
+  framing_mode: string;
+  broll_count: number;
+  status: string;
+}
+
+export interface YouTubeCaptionRequest {
+  tone?: YouTubeCaptionTone;
+  include_hashtags?: boolean;
+  include_timestamps?: boolean;
+  custom_caption_text?: string | null;
+  apply_caption_to_clip?: boolean;
+}
+
+export interface YouTubeCaptionPackage {
+  clip_id: number;
+  tone: string;
+  youtube_title: string;
+  youtube_description: string;
+  hashtags: string[];
+  tags: string[];
+  caption_text: string;
+  timed_captions: YouTubeTimedCaption[];
+  srt_content: string;
+  specs_check: YouTubeSpecsCheck;
+}
+
+export interface UploadShortResponse {
+  project: VideoProject;
+  clip: Clip;
+  youtube_package: YouTubeCaptionPackage;
+}
+
 /** Generic paginated API response envelope. */
 export interface PaginatedResponse<T> {
   items: T[];

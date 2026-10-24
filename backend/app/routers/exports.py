@@ -1,10 +1,11 @@
-"""Export & Publish endpoints: render, poll status, download.
+"""Export & Publish endpoints: render, poll status, download, and YouTube Shorts caption package.
 
 Owned by BACKEND-AGENT (Export & Publish module). Registered under the
 `/clips` prefix so the final paths are /clips/{id}/export,
-/clips/{id}/export/status, and /clips/{id}/download -- the Clip Library
-module (app/routers/clips.py) owns /clips, /clips/{id}, and
-/clips/{id}/reorder and does not define these sub-paths.
+/clips/{id}/export/status, /clips/{id}/download, and
+/clips/{id}/youtube-caption -- the Clip Library module (app/routers/clips.py)
+owns /clips, /clips/{id}, and /clips/{id}/reorder and does not define these
+sub-paths.
 
 Ownership of a clip is checked directly against the Clip model here
 (rather than importing the Clip Library module's service layer) to avoid
@@ -34,6 +35,8 @@ from app.schemas.export import (
     ExportStatusResponse,
     SpeakerFocusWindow,
     SplitScreenSection,
+    YouTubeCaptionPackageResponse,
+    YouTubeCaptionRequest,
 )
 from app.services import task_queue
 from app.services.broll_sourcing import auto_source_broll
@@ -42,6 +45,7 @@ from app.services.clip_service import _REVIEW_THRESHOLD, score_clip_partial
 from app.services.reframe import SpeakerWindow, compute_speaker_framing
 from app.services.storage import get_file_path
 from app.services.video_render import _caption_events, render_clip
+from app.services.youtube_metadata import generate_youtube_caption_package
 
 logger = logging.getLogger(__name__)
 
@@ -244,30 +248,11 @@ def clip_framing(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ) -> ClipFramingResponse:
-    """Where the speaker sits in the source, for the Speaker Focus preview.
-
-    The editor previews a draft clip by streaming the *source* file and
-    seeking client-side, so without this it can only guess at the framing
-    -- a centre crop, which on a screen recording or an off-centre
-    interview lands anywhere but on the person. Returning the same windows
-    the renderer will use keeps the preview honest.
-
-    Where two people are in conversation the response also carries the
-    stretches that play as a split screen, so the preview can stack them
-    the way the export will.
-
-    Declared `def`, not `async def`, so FastAPI runs it in the threadpool:
-    the probe is a bounded low-resolution ffmpeg read (a second or two,
-    then cached per file and clip range), and it must not block the event
-    loop while it runs. Rendering itself stays a background job.
-    """
+    """Where the speaker sits in the source, for the Speaker Focus preview."""
 
     clip = _get_owned_clip(db, clip_id, current_user.id)
 
     if clip.status == ClipStatus.ready and clip.video_file_path:
-        # /preview serves the finished 9:16 export for a ready clip; it is
-        # already framed on the speaker, so cropping it again would zoom in
-        # on a crop.
         return ClipFramingResponse(clip_id=clip.id, mode="rendered")
 
     source_path = clip.video_project.source_file_path if clip.video_project else None
@@ -288,7 +273,9 @@ def clip_framing(
     if framing is None:
         return ClipFramingResponse(clip_id=clip.id, mode="unavailable")
 
-    def normalise(window: SpeakerWindow, crop_width: int, crop_height: int):  # type: ignore[no-untyped-def]
+    def normalise(
+        window: SpeakerWindow, crop_width: int, crop_height: int
+    ) -> SpeakerFocusWindow:
         return SpeakerFocusWindow(
             start_time=window.start_time,
             x=window.x / framing.source_width,
@@ -299,14 +286,9 @@ def clip_framing(
         )
 
     split = framing.split
-    return ClipFramingResponse(
-        clip_id=clip.id,
-        mode="speaker_focus",
-        windows=[
-            normalise(window, framing.crop_width, framing.crop_height)
-            for window in framing.windows
-        ],
-        split_sections=[
+    split_sections: list[SplitScreenSection] = []
+    if split is not None:
+        split_sections = [
             SplitScreenSection(
                 start_time=section.start_time,
                 end_time=section.end_time,
@@ -315,8 +297,17 @@ def clip_framing(
                     for pane in section.panes
                 ],
             )
-            for section in (split.sections if split else ())
+            for section in split.sections
+        ]
+
+    return ClipFramingResponse(
+        clip_id=clip.id,
+        mode="speaker_focus",
+        windows=[
+            normalise(window, framing.crop_width, framing.crop_height)
+            for window in framing.windows
         ],
+        split_sections=split_sections,
     )
 
 
@@ -326,15 +317,7 @@ def clip_captions(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ) -> ClipCaptionsResponse:
-    """The caption timeline this clip will be exported with.
-
-    Captions come from the transcript unless the user wrote their own, so
-    a clip that has never been edited still has plenty to say -- and the
-    editor, which only knows about `caption_text`, would otherwise show a
-    silent preview for a short that exports fully subtitled. Serving the
-    render path's own timeline keeps the two in step, down to which word
-    is lit up.
-    """
+    """The caption timeline this clip will be exported with."""
 
     clip = _get_owned_clip(db, clip_id, current_user.id)
     duration = max(clip.end_time - clip.start_time, 0.1)
@@ -362,21 +345,81 @@ def clip_captions(
     )
 
 
+@router.get(
+    "/{clip_id}/youtube-caption",
+    response_model=YouTubeCaptionPackageResponse,
+)
+def get_youtube_caption_package(
+    clip_id: int,
+    tone: str = Query(
+        "viral",
+        description=(
+            "Tone for YouTube caption package "
+            "(viral, educational, storytelling, professional)."
+        ),
+    ),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> YouTubeCaptionPackageResponse:
+    """Fetch or generate the YouTube Shorts caption, title, description, and content preview."""
+
+    clip = _get_owned_clip(db, clip_id, current_user.id)
+    segments = (
+        list(clip.video_project.transcript_segments) if clip.video_project else []
+    )
+    package = generate_youtube_caption_package(
+        clip,
+        segments,
+        tone=tone,
+        include_hashtags=True,
+        include_timestamps=True,
+    )
+    return YouTubeCaptionPackageResponse(**package)
+
+
+@router.post(
+    "/{clip_id}/youtube-caption",
+    response_model=YouTubeCaptionPackageResponse,
+)
+def create_youtube_caption_package(
+    clip_id: int,
+    payload: YouTubeCaptionRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> YouTubeCaptionPackageResponse:
+    """Generate or customize a YouTube Shorts caption & content package for a clip."""
+
+    clip = _get_owned_clip(db, clip_id, current_user.id)
+    if payload.custom_caption_text is not None and payload.apply_caption_to_clip:
+        clip.caption_text = payload.custom_caption_text.strip() or None
+        db.commit()
+        db.refresh(clip)
+
+    segments = (
+        list(clip.video_project.transcript_segments) if clip.video_project else []
+    )
+    package = generate_youtube_caption_package(
+        clip,
+        segments,
+        tone=payload.tone,
+        include_hashtags=payload.include_hashtags,
+        include_timestamps=payload.include_timestamps,
+    )
+    if payload.apply_caption_to_clip and not clip.caption_text and package["caption_text"]:
+        clip.caption_text = str(package["caption_text"])
+        db.commit()
+        db.refresh(clip)
+
+    return YouTubeCaptionPackageResponse(**package)
+
+
 @router.get("/{clip_id}/thumbnail")
 async def clip_thumbnail(
     clip_id: int,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user_for_media),
 ) -> FileResponse:
-    """Serve the poster frame written during export.
-
-    Auth is via `?token=` for the same reason as /preview: an <img> tag
-    can't send an Authorization header.
-
-    Raises:
-        NotFoundError: the clip has never been exported, or the poster
-            frame is missing on disk.
-    """
+    """Serve the poster frame written during export."""
 
     clip = _get_owned_clip(db, clip_id, current_user.id)
 
@@ -396,15 +439,7 @@ async def download_clip(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user_for_media),
 ) -> FileResponse:
-    """Stream the rendered MP4 as an attachment, once export has completed.
-
-    Accepts authentication either via standard `Authorization: Bearer <token>`
-    header or `?token=` query parameter (enabling direct browser download).
-
-    Raises:
-        ValidationAppError: the clip hasn't finished rendering (or failed).
-        NotFoundError: status says ready but the file is missing on disk.
-    """
+    """Stream the rendered MP4 as an attachment, once export has completed."""
 
     clip = _get_owned_clip(db, clip_id, current_user.id)
 

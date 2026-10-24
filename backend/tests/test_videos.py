@@ -64,7 +64,11 @@ class TestCreateUpload:
             new=AsyncMock(return_value=FAKE_SEGMENTS),
         ):
             files = {"file": ("clip.mp4", b"fake video bytes", "video/mp4")}
-            data = {"title": "Split B-Roll Project", "source_type": "upload", "broll_placement": "split"}
+            data = {
+                "title": "Split B-Roll Project",
+                "source_type": "upload",
+                "broll_placement": "split",
+            }
             response = client.post("/api/v1/videos", data=data, files=files, headers=auth_headers)
 
         assert response.status_code == 201
@@ -518,7 +522,10 @@ class TestViralVerificationPipeline:
 
         import asyncio
         with (
-            patch("app.services.clip_service.create_clips_from_highlights", return_value=[sub_clip]),
+            patch(
+                "app.services.clip_service.create_clips_from_highlights",
+                return_value=[sub_clip],
+            ),
             patch("app.routers.videos.render_clip") as mock_render,
         ):
             asyncio.run(_produce_clips_for_project(db_session, project))
@@ -569,7 +576,10 @@ class TestViralVerificationPipeline:
 
         import asyncio
         with (
-            patch("app.services.clip_service.create_clips_from_highlights", return_value=[weak_clip, viral_clip]),
+            patch(
+                "app.services.clip_service.create_clips_from_highlights",
+                return_value=[weak_clip, viral_clip],
+            ),
             patch("app.routers.videos.storage.get_file_path") as mock_fp,
             patch("app.routers.videos.render_clip") as mock_render,
         ):

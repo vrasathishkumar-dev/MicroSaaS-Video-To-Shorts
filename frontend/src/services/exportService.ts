@@ -1,5 +1,10 @@
 import { formatDetail } from '@/lib/apiError';
 import api, { API_URL, getAccessToken } from '@/services/api';
+import type {
+  YouTubeCaptionPackage,
+  YouTubeCaptionRequest,
+  YouTubeCaptionTone,
+} from '@/types';
 
 /** Shape returned by both the export-trigger and export-status endpoints. */
 export interface ExportStatusResponse {
@@ -58,6 +63,34 @@ export async function getExportStatus(
 ): Promise<ExportStatusResponse> {
   const { data } = await api.get<ExportStatusResponse>(
     `/clips/${clipId}/export/status`,
+  );
+  return data;
+}
+
+/**
+ * Fetch the generated YouTube Shorts caption, title, description, hashtags, and content preview package.
+ */
+export async function getYouTubeCaptionPackage(
+  clipId: number,
+  tone: YouTubeCaptionTone = 'viral',
+): Promise<YouTubeCaptionPackage> {
+  const { data } = await api.get<YouTubeCaptionPackage>(
+    `/clips/${clipId}/youtube-caption`,
+    { params: { tone } },
+  );
+  return data;
+}
+
+/**
+ * Generate or customize the YouTube Shorts caption & content package for a clip.
+ */
+export async function generateYouTubeCaptionPackage(
+  clipId: number,
+  payload: YouTubeCaptionRequest,
+): Promise<YouTubeCaptionPackage> {
+  const { data } = await api.post<YouTubeCaptionPackage>(
+    `/clips/${clipId}/youtube-caption`,
+    payload,
   );
   return data;
 }

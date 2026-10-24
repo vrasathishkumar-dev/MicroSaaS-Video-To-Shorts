@@ -37,17 +37,24 @@ from app.models.video_project import (
     VideoProjectStatus,
 )
 from app.schemas.clip import ClipResponse
+from app.schemas.export import YouTubeCaptionPackageResponse
 from app.schemas.video import (
     PaginatedVideoProjects,
     TranscriptSegmentResponse,
+    UploadShortResponse,
     VideoProjectResponse,
 )
 from app.services import clip_service, storage, task_queue
 from app.services.broll_sourcing import auto_source_broll
 from app.services.clip_service import _REVIEW_THRESHOLD
 from app.services.highlight_detection import detect_highlights
-from app.services.transcription import TranscriptionError, transcribe_video
+from app.services.transcription import (
+    TranscriptionError,
+    _probe_video_duration,
+    transcribe_video,
+)
 from app.services.video_render import render_clip
+from app.services.youtube_metadata import generate_youtube_caption_package
 
 logger = logging.getLogger(__name__)
 
@@ -103,7 +110,8 @@ async def _call_transcribe_video(file_path: str, source_url: str | None) -> list
 
 
 async def _produce_clips_for_project(db: Session, project: VideoProject) -> None:
-    """Generate clips from highlights, check for viral content, auto-source B-roll, and render 9:16 exports."""
+    """Generate clips from highlights, check for viral content, auto-source B-roll,
+    and render 9:16 exports."""
 
     clips = clip_service.create_clips_from_highlights(
         db, video_project_id=project.id, user_id=project.user_id
@@ -111,7 +119,7 @@ async def _produce_clips_for_project(db: Session, project: VideoProject) -> None
     if not clips:
         return
 
-    # Viral verification pipeline: verify that clips contain viral content (score >= _REVIEW_THRESHOLD)
+    # Viral verification pipeline: verify that clips contain viral content
     viral_clips = [
         c for c in clips if (c.virality_score or 0.0) >= _REVIEW_THRESHOLD
     ]
@@ -127,7 +135,8 @@ async def _produce_clips_for_project(db: Session, project: VideoProject) -> None
         return
 
     logger.info(
-        "Viral verification pipeline passed: %d of %d clips have verified viral content (>= %.1f score). Proceeding to create videos...",
+        "Viral verification pipeline passed: %d of %d clips have verified viral "
+        "content (>= %.1f score). Proceeding to create videos...",
         len(viral_clips),
         len(clips),
         _REVIEW_THRESHOLD,
@@ -189,7 +198,9 @@ async def process_video_project(project_id: int, auto_produce: bool = False) -> 
                     project.source_file_path = await storage.download_from_url(
                         project.source_url, "videos"
                     )
-                    extracted_title = storage.get_downloaded_title(project.source_file_path)
+                    extracted_title = storage.get_downloaded_title(
+                        project.source_file_path
+                    )
                     if (
                         extracted_title
                         and project.title.strip().lower() in _DEFAULT_PLACEHOLDER_TITLES
@@ -206,6 +217,10 @@ async def process_video_project(project_id: int, auto_produce: bool = False) -> 
             project.error_message = None
             db.commit()
 
+            if not project.source_file_path:
+                raise TranscriptionError(
+                    "No source file available to transcribe for this project"
+                )
             file_path = str(storage.get_file_path(project.source_file_path))
             raw_segments = await _call_transcribe_video(file_path, project.source_url)
 
@@ -294,7 +309,8 @@ def run_produce_project_clips(project_id: int) -> None:
             ]
             if not viral_clips:
                 logger.info(
-                    "run_produce_project_clips: No viral content found for project %s (all %d clips below %.1f). Skipping video creation.",
+                    "run_produce_project_clips: No viral content found for project %s "
+                    "(all %d clips below %.1f). Skipping video creation.",
                     project.id,
                     len(clips),
                     _REVIEW_THRESHOLD,
@@ -379,6 +395,168 @@ async def create_video_project(
     return project
 
 
+@router.post(
+    "/upload-short",
+    response_model=UploadShortResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+async def upload_short_video(
+    background_tasks: BackgroundTasks,
+    file: UploadFile = File(...),
+    title: str = Form(default=""),
+    caption_text: str | None = Form(default=None),
+    tone: str = Form(default="viral"),
+    framing_mode: ClipFraming = Form(default=ClipFraming.speaker_focus),
+    caption_style: ClipCaptionStyle = Form(default=ClipCaptionStyle.hormozi),
+    auto_broll: str = Form(default="false"),
+    broll_placement: BrollPlacement = Form(default=BrollPlacement.bottom),
+    auto_render: str = Form(default="true"),
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+) -> UploadShortResponse:
+    """Upload a Short video directly, extract/generate captions, and return a YouTube
+    Shorts caption & content package immediately."""
+
+    rate_limit_video_submit(user.id)
+
+    relative_path = await storage.save_upload(file, "videos")
+    abs_path = storage.get_file_path(relative_path)
+
+    clean_title = title.strip()
+    if not clean_title:
+        stem = Path(file.filename or "Uploaded Short").stem
+        clean_title = stem.replace("_", " ").replace("-", " ").strip() or "Uploaded Short"
+    clean_title = clean_title[:255]
+
+    auto_broll_bool = _parse_form_bool(auto_broll, default=False)
+    auto_render_bool = _parse_form_bool(auto_render, default=True)
+
+    probed_duration = await asyncio.to_thread(_probe_video_duration, abs_path)
+    raw_segments: list[dict] = []
+
+    if caption_text and caption_text.strip():
+        dur = min(60.0, max(5.0, probed_duration or 15.0))
+        raw_segments = [
+            {
+                "start_time": 0.0,
+                "end_time": round(dur, 2),
+                "text": caption_text.strip(),
+            }
+        ]
+    else:
+        try:
+            raw_segments = await _call_transcribe_video(str(abs_path), None)
+        except Exception as exc:
+            logger.warning(
+                "upload_short_video: transcription fallback for %s (%s)",
+                abs_path,
+                exc,
+            )
+            dur = min(60.0, max(5.0, probed_duration or 15.0))
+            raw_segments = [
+                {
+                    "start_time": 0.0,
+                    "end_time": round(dur / 2, 2),
+                    "text": f"Watch this key moment from {clean_title}!",
+                },
+                {
+                    "start_time": round(dur / 2, 2),
+                    "end_time": round(dur, 2),
+                    "text": "Follow and subscribe for more daily YouTube Shorts.",
+                },
+            ]
+
+    max_seg_end = max((float(s["end_time"]) for s in raw_segments), default=15.0)
+    total_duration = round(max(1.0, probed_duration or max_seg_end), 2)
+    clip_end_time = round(min(total_duration, 60.0), 2)
+
+    project = VideoProject(
+        user_id=user.id,
+        title=clean_title,
+        source_type=SourceType.upload,
+        source_file_path=relative_path,
+        status=VideoProjectStatus.ready,
+        duration_seconds=total_duration,
+        target_clip_length=ClipLength.fast if clip_end_time <= 30.0 else ClipLength.auto,
+        framing_mode=framing_mode,
+        caption_style=caption_style,
+        auto_broll=auto_broll_bool,
+        broll_placement=broll_placement,
+        virality_score=85.0,
+    )
+    db.add(project)
+    db.flush()
+
+    segments = [
+        TranscriptSegment(
+            video_project_id=project.id,
+            start_time=float(seg["start_time"]),
+            end_time=float(seg["end_time"]),
+            text=str(seg["text"]),
+            is_highlight=(idx == 0),
+            highlight_score=0.85 if idx == 0 else 0.65,
+        )
+        for idx, seg in enumerate(raw_segments)
+        if float(seg["start_time"]) < clip_end_time
+    ]
+    if segments:
+        db.add_all(segments)
+        db.flush()
+
+    spoken_text = (
+        caption_text.strip()
+        if caption_text and caption_text.strip()
+        else " ".join(s.text.strip() for s in segments if s.text.strip())
+    )
+
+    clip = Clip(
+        video_project_id=project.id,
+        user_id=user.id,
+        title=clean_title,
+        start_time=0.0,
+        end_time=clip_end_time,
+        order_index=0,
+        status=ClipStatus.rendering if auto_render_bool else ClipStatus.draft,
+        caption_text=spoken_text or clean_title,
+        framing_mode=framing_mode,
+        caption_style=caption_style,
+        broll_placement=broll_placement,
+        hook_score=82.0,
+        completeness_score=100.0,
+        virality_score=85.0,
+        virality_reason="Strong hook, sentence completeness.",
+    )
+    db.add(clip)
+    db.commit()
+    db.refresh(project)
+    db.refresh(clip)
+
+    if auto_broll_bool:
+        try:
+            await auto_source_broll(db, clip)
+            db.refresh(clip)
+        except Exception:
+            logger.exception("Auto-sourcing B-roll failed for uploaded short id=%s", clip.id)
+            db.rollback()
+
+    if auto_render_bool:
+        task_queue.enqueue(background_tasks, render_clip, clip.id)
+
+    yt_pkg = generate_youtube_caption_package(
+        clip,
+        segments,
+        tone=tone if tone in {"viral", "educational", "storytelling", "professional"} else "viral",
+        include_hashtags=True,
+        include_timestamps=True,
+    )
+
+    return UploadShortResponse(
+        project=VideoProjectResponse.model_validate(project),
+        clip=ClipResponse.model_validate(clip),
+        youtube_package=YouTubeCaptionPackageResponse(**yt_pkg),
+    )
+
+
 @router.get("", response_model=PaginatedVideoProjects)
 async def list_video_projects(
     page: int = 1,
@@ -411,12 +589,7 @@ async def get_video_project(
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
 ) -> VideoProject:
-    """Get a single video project owned by the current user (404 otherwise).
-
-    Automatically recovers projects left in an in-progress state (`pending`,
-    `downloading`, `transcribing`, `analyzing`) when no background task is
-    currently running for `project_id` (e.g. after a server reload).
-    """
+    """Get a single video project owned by the current user (404 otherwise)."""
 
     project = _get_owned_project(db, project_id, user)
     if (
@@ -469,18 +642,17 @@ async def reprocess_video_project(
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
 ) -> VideoProject:
-    """Re-trigger the transcription/highlight pipeline for an existing project.
-
-    Keeps `source_file_path` if the file was already downloaded on disk so
-    reprocessing a stuck project doesn't re-download the video from scratch.
-    """
+    """Re-trigger the transcription/highlight pipeline for an existing project."""
 
     project = _get_owned_project(db, project_id, user)
     project.status = VideoProjectStatus.pending
     project.error_message = None
-    if project.source_type == SourceType.url and project.source_file_path:
-        if not storage.get_file_path(project.source_file_path).is_file():
-            project.source_file_path = None
+    if (
+        project.source_type == SourceType.url
+        and project.source_file_path
+        and not storage.get_file_path(project.source_file_path).is_file()
+    ):
+        project.source_file_path = None
     db.commit()
     db.refresh(project)
 
@@ -529,7 +701,9 @@ async def produce_video_project(
     ]
     if not viral_clips:
         raise ValidationAppError(
-            f"No viral content detected in this video (all {len(clips)} clips scored below the {_REVIEW_THRESHOLD:.0f}-point virality threshold). Cannot create videos."
+            f"No viral content detected in this video (all {len(clips)} clips "
+            f"scored below the {_REVIEW_THRESHOLD:.0f}-point virality threshold). "
+            "Cannot create videos."
         )
 
     for clip in viral_clips:

@@ -651,7 +651,7 @@ def _detect_faces(luma) -> dict[int, list[tuple[int, int, int, int]]]:  # type: 
     try:
         import numpy as np
 
-        cascade_dir = cv2.data.haarcascades
+        cascade_dir = getattr(cv2, "data", None).haarcascades  # type: ignore[union-attr]
         frontal = cv2.CascadeClassifier(cascade_dir + "haarcascade_frontalface_alt2.xml")
         profile = cv2.CascadeClassifier(cascade_dir + "haarcascade_profileface.xml")
         if frontal.empty() or profile.empty():
@@ -793,7 +793,8 @@ def _as_box(box: tuple[float, float, float, float]) -> tuple[int, int, int, int]
 
 
 def _centre_distance(
-    first: tuple[int, int, int, int], second: tuple[int, int, int, int]
+    first: tuple[float, float, float, float],
+    second: tuple[float, float, float, float],
 ) -> float:
     """Distance between two boxes' centres, in pixels."""
 

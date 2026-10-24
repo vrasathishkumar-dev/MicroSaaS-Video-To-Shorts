@@ -1,5 +1,15 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { AlertCircle, AlertTriangle, Download, Loader2, ShieldCheck, Zap } from 'lucide-react';
+import {
+  AlertCircle,
+  AlertTriangle,
+  Download,
+  Loader2,
+  PlaySquare,
+  ShieldCheck,
+  Sparkles,
+  Zap,
+} from 'lucide-react';
+import { YouTubeCaptionPanel } from '@/components/clips/YouTubeCaptionPanel';
 import { GlassCard } from '@/components/ui/GlassCard';
 import { GradientButton } from '@/components/ui/GradientButton';
 import {
@@ -18,20 +28,26 @@ type ExportState = 'idle' | 'rendering' | 'ready' | 'failed';
 export interface ExportPanelProps {
   clipId: number;
   viralityScore?: number | null;
+  onCaptionApplied?: (newCaptionText: string) => void;
 }
 
 /**
  * Self-contained export widget for a single clip. Fetches its own status on
- * mount, drives export + polling, and offers download/retry. Designed to be
- * dropped into any parent layout as `<ExportPanel clipId={clip.id} />`.
+ * mount, drives export + polling, offers download/retry, and provides the
+ * end-of-workflow option to generate YouTube Shorts captions & inspect content.
  */
-export function ExportPanel({ clipId, viralityScore }: ExportPanelProps) {
+export function ExportPanel({
+  clipId,
+  viralityScore,
+  onCaptionApplied,
+}: ExportPanelProps) {
   const [status, setStatus] = useState<ExportState>('idle');
   const [isCheckingStatus, setIsCheckingStatus] = useState(true);
   const [isStarting, setIsStarting] = useState(false);
   const [isDownloading, setIsDownloading] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [copyrightSafe, setCopyrightSafe] = useState(false);
+  const [showYouTubeCaption, setShowYouTubeCaption] = useState(false);
 
   // Score Gate dialog state
   const [showGateDialog, setShowGateDialog] = useState(false);
@@ -152,7 +168,10 @@ export function ExportPanel({ clipId, viralityScore }: ExportPanelProps) {
     try {
       await downloadClip(clipId);
     } catch (err: unknown) {
-      const msg = err instanceof Error ? err.message : 'Failed to download the clip. Please try again.';
+      const msg =
+        err instanceof Error
+          ? err.message
+          : 'Failed to download the clip. Please try again.';
       setErrorMessage(msg);
     } finally {
       setIsDownloading(false);
@@ -160,200 +179,254 @@ export function ExportPanel({ clipId, viralityScore }: ExportPanelProps) {
   };
 
   return (
-    <GlassCard className="space-y-5">
-      <div className="flex items-center justify-between border-b border-glass-border pb-3">
-        <div>
-          <h3 className="text-base font-bold text-foreground">9:16 Video Export & Download</h3>
-          <p className="text-xs text-muted-foreground mt-0.5">
-            Render vertical Short with burned-in animated subtitles and B-roll.
-          </p>
-        </div>
-        <span className="rounded-full bg-primary/10 px-2.5 py-1 text-[11px] font-semibold text-primary">
-          1080 &times; 1920 HD
-        </span>
-      </div>
-
-      {/* Export Specifications Box */}
-      <div className="grid grid-cols-2 sm:grid-cols-3 gap-2.5 rounded-xl bg-background/50 border border-glass-border p-3 text-xs">
-        <div>
-          <span className="text-muted-foreground block text-[10px]">Aspect Ratio</span>
-          <span className="font-semibold text-foreground">9:16 (Shorts / Reels)</span>
-        </div>
-        <div>
-          <span className="text-muted-foreground block text-[10px]">Resolution</span>
-          <span className="font-semibold text-foreground">1080 &times; 1920 MP4</span>
-        </div>
-        <div>
-          <span className="text-muted-foreground block text-[10px]">Audio</span>
-          <span className="font-semibold text-foreground">Stereo AAC 48kHz</span>
-        </div>
-      </div>
-
-      {/* Copyright-Safe / Fair-Use Transformative Mode Toggle */}
-      <div className="rounded-xl border border-emerald-500/30 bg-emerald-500/5 p-3.5 space-y-2">
-        <div className="flex items-center justify-between gap-3">
-          <div className="flex items-center gap-2">
-            <ShieldCheck className="h-4 w-4 text-emerald-400 shrink-0" />
-            <div>
-              <label
-                htmlFor={`copyright-safe-toggle-${clipId}`}
-                className="text-xs font-semibold text-foreground cursor-pointer"
-              >
-                Copyright-Safe Fair-Use Mode (Anti-Content ID)
-              </label>
-              <p className="text-[11px] text-muted-foreground">
-                Cuts raw hook to &le;7.5s, protects audio/video fingerprints, and adds AI commentary voiceover + full-screen B-roll.
-              </p>
-            </div>
+    <div className="space-y-5">
+      <GlassCard className="space-y-5">
+        <div className="flex items-center justify-between border-b border-glass-border pb-3">
+          <div>
+            <h3 className="text-base font-bold text-foreground">
+              9:16 Video Export &amp; Download
+            </h3>
+            <p className="text-xs text-muted-foreground mt-0.5">
+              Render vertical Short with burned-in animated subtitles and B-roll.
+            </p>
           </div>
-          <input
-            id={`copyright-safe-toggle-${clipId}`}
-            type="checkbox"
-            checked={copyrightSafe}
-            onChange={(e) => setCopyrightSafe(e.target.checked)}
-            aria-label="Copyright-Safe Fair-Use Mode"
-            className="h-4 w-4 rounded border-glass-border accent-emerald-500 cursor-pointer"
-          />
+          <span className="rounded-full bg-primary/10 px-2.5 py-1 text-[11px] font-semibold text-primary">
+            1080 &times; 1920 HD
+          </span>
         </div>
-      </div>
 
-      {/* Score Gate Confirmation Dialog */}
-      {showGateDialog && gateDetail && (
-        <div className="rounded-xl border border-amber-500/40 bg-amber-500/10 p-4 space-y-3">
-          <div className="flex items-start gap-2.5">
-            <AlertTriangle className="h-5 w-5 text-amber-400 mt-0.5 shrink-0" />
-            <div className="space-y-1">
-              <p className="text-sm font-semibold text-amber-300">Viral Content Gate: Low Virality Score</p>
-              <p className="text-xs text-muted-foreground leading-relaxed">
-                This clip scored{' '}
-                <span className="font-bold text-amber-400">
-                  {Math.round(gateDetail.virality_score)}/100
-                </span>{' '}
-                — below the {gateDetail.threshold}-point review threshold. The hook or sentence completeness may need review before rendering.
-              </p>
-            </div>
+        {/* Export Specifications Box */}
+        <div className="grid grid-cols-2 sm:grid-cols-3 gap-2.5 rounded-xl bg-background/50 border border-glass-border p-3 text-xs">
+          <div>
+            <span className="text-muted-foreground block text-[10px]">
+              Aspect Ratio
+            </span>
+            <span className="font-semibold text-foreground">
+              9:16 (Shorts / Reels)
+            </span>
           </div>
-          <div className="flex gap-2 pt-1">
-            <button
-              id={`export-cancel-gate-${clipId}`}
-              type="button"
-              onClick={() => setShowGateDialog(false)}
-              className="flex-1 rounded-lg border border-glass-border bg-background/60 px-3 py-2 text-xs font-medium text-foreground hover:bg-background/80 transition-colors"
-            >
-              Review clip first
-            </button>
-            <GradientButton
-              id={`export-force-${clipId}`}
-              onClick={handleConfirmForce}
-              disabled={isConfirmingForce}
-              className="flex-1 py-2 text-xs font-semibold"
-            >
-              {isConfirmingForce ? (
-                <Loader2 className="h-3.5 w-3.5 animate-spin mr-1" />
-              ) : (
-                <Zap className="h-3.5 w-3.5 mr-1" />
-              )}
-              Render anyway
-            </GradientButton>
+          <div>
+            <span className="text-muted-foreground block text-[10px]">
+              Resolution
+            </span>
+            <span className="font-semibold text-foreground">
+              1080 &times; 1920 MP4
+            </span>
+          </div>
+          <div>
+            <span className="text-muted-foreground block text-[10px]">Audio</span>
+            <span className="font-semibold text-foreground">
+              Stereo AAC 48kHz
+            </span>
           </div>
         </div>
-      )}
 
-      {isCheckingStatus ? (
-        <div className="flex items-center justify-center gap-2 py-6 text-sm text-muted-foreground">
-          <Loader2 className="h-4 w-4 animate-spin text-primary" />
-          <span>Checking export status…</span>
+        {/* Copyright-Safe / Fair-Use Transformative Mode Toggle */}
+        <div className="rounded-xl border border-emerald-500/30 bg-emerald-500/5 p-3.5 space-y-2">
+          <div className="flex items-center justify-between gap-3">
+            <div className="flex items-center gap-2">
+              <ShieldCheck className="h-4 w-4 text-emerald-400 shrink-0" />
+              <div>
+                <label
+                  htmlFor={`copyright-safe-toggle-${clipId}`}
+                  className="text-xs font-semibold text-foreground cursor-pointer"
+                >
+                  Copyright-Safe Fair-Use Mode (Anti-Content ID)
+                </label>
+                <p className="text-[11px] text-muted-foreground">
+                  Cuts raw hook to &le;7.5s, protects audio/video fingerprints, and
+                  adds AI commentary voiceover + full-screen B-roll.
+                </p>
+              </div>
+            </div>
+            <input
+              id={`copyright-safe-toggle-${clipId}`}
+              type="checkbox"
+              checked={copyrightSafe}
+              onChange={(e) => setCopyrightSafe(e.target.checked)}
+              aria-label="Copyright-Safe Fair-Use Mode"
+              className="h-4 w-4 rounded border-glass-border accent-emerald-500 cursor-pointer"
+            />
+          </div>
         </div>
-      ) : (
-        <div className="space-y-4">
-          {status === 'idle' && !showGateDialog && (
-            <div className="space-y-3">
-              <GradientButton
-                onClick={() => handleExport(false)}
-                disabled={isStarting}
-                className="w-full py-3 text-sm font-semibold shadow-lg"
-              >
-                {isStarting ? (
-                  <Loader2 className="h-4 w-4 animate-spin mr-1.5" />
-                ) : (
-                  <Download className="h-4 w-4 mr-1.5" />
-                )}
-                Export (9:16)
-              </GradientButton>
-              <p className="text-center text-[11px] text-muted-foreground">
-                Renders high-quality 9:16 MP4 with selected caption style and B-roll overlays.
-              </p>
-            </div>
-          )}
 
-          {status === 'rendering' && (
-            <div className="rounded-xl border border-primary/30 bg-primary/10 p-5 text-center space-y-3">
-              <div className="flex items-center justify-center gap-2 text-primary font-semibold text-sm">
-                <Loader2 className="h-5 w-5 animate-spin" />
-                <span>Rendering your 9:16 clip…</span>
-              </div>
-              <p className="text-xs text-muted-foreground">
-                FFmpeg is compositing video, burning subtitles, and overlaying B-roll footage.
-              </p>
-              <div className="h-2 w-full overflow-hidden rounded-full bg-muted">
-                <div className="h-full w-2/3 animate-pulse rounded-full bg-primary" />
+        {/* Score Gate Confirmation Dialog */}
+        {showGateDialog && gateDetail && (
+          <div className="rounded-xl border border-amber-500/40 bg-amber-500/10 p-4 space-y-3">
+            <div className="flex items-start gap-2.5">
+              <AlertTriangle className="h-5 w-5 text-amber-400 mt-0.5 shrink-0" />
+              <div className="space-y-1">
+                <p className="text-sm font-semibold text-amber-300">
+                  Viral Content Gate: Low Virality Score
+                </p>
+                <p className="text-xs text-muted-foreground leading-relaxed">
+                  This clip scored{' '}
+                  <span className="font-bold text-amber-400">
+                    {Math.round(gateDetail.virality_score)}/100
+                  </span>{' '}
+                  — below the {gateDetail.threshold}-point review threshold. The
+                  hook or sentence completeness may need review before rendering.
+                </p>
               </div>
             </div>
-          )}
-
-          {status === 'ready' && (
-            <div className="space-y-3">
-              <div className="rounded-xl border border-emerald-500/30 bg-emerald-500/10 p-3.5 text-center text-xs text-emerald-400 font-medium">
-                ✨ Your 9:16 vertical Short is rendered and ready for download!
-              </div>
-              <GradientButton
-                onClick={handleDownload}
-                disabled={isDownloading}
-                className="w-full py-3 text-sm font-bold bg-gradient-to-r from-emerald-500 to-teal-500 text-white shadow-lg hover:opacity-95"
-              >
-                {isDownloading ? (
-                  <Loader2 className="h-4 w-4 animate-spin mr-1.5" />
-                ) : (
-                  <Download className="h-4 w-4 mr-1.5" />
-                )}
-                Download
-              </GradientButton>
+            <div className="flex gap-2 pt-1">
               <button
+                id={`export-cancel-gate-${clipId}`}
                 type="button"
-                onClick={() => handleExport(false)}
-                disabled={isStarting}
-                className="w-full text-center text-xs text-muted-foreground hover:text-foreground transition-colors underline pt-1"
+                onClick={() => setShowGateDialog(false)}
+                className="flex-1 rounded-lg border border-glass-border bg-background/60 px-3 py-2 text-xs font-medium text-foreground hover:bg-background/80 transition-colors"
               >
-                Re-export with new edits
+                Review clip first
               </button>
-            </div>
-          )}
-
-          {status === 'failed' && (
-            <div className="space-y-3">
-              <div className="flex items-center gap-2 rounded-xl bg-destructive/15 p-3 text-xs text-destructive">
-                <AlertCircle className="h-4 w-4 shrink-0" />
-                <span>{errorMessage ?? 'Export failed.'}</span>
-              </div>
               <GradientButton
-                variant="outline"
-                onClick={() => handleExport(false)}
-                disabled={isStarting}
-                className="w-full"
+                id={`export-force-${clipId}`}
+                onClick={handleConfirmForce}
+                disabled={isConfirmingForce}
+                className="flex-1 py-2 text-xs font-semibold"
               >
-                {isStarting ? (
-                  <Loader2 className="h-4 w-4 animate-spin mr-1.5" />
-                ) : null}
-                Retry export
+                {isConfirmingForce ? (
+                  <Loader2 className="h-3.5 w-3.5 animate-spin mr-1" />
+                ) : (
+                  <Zap className="h-3.5 w-3.5 mr-1" />
+                )}
+                Render anyway
               </GradientButton>
             </div>
-          )}
+          </div>
+        )}
 
-          {errorMessage && status !== 'failed' && (
-            <p className="text-xs text-destructive bg-destructive/10 p-2.5 rounded-lg">{errorMessage}</p>
-          )}
+        {isCheckingStatus ? (
+          <div className="flex items-center justify-center gap-2 py-6 text-sm text-muted-foreground">
+            <Loader2 className="h-4 w-4 animate-spin text-primary" />
+            <span>Checking export status…</span>
+          </div>
+        ) : (
+          <div className="space-y-4">
+            {status === 'idle' && !showGateDialog && (
+              <div className="space-y-3">
+                <GradientButton
+                  onClick={() => handleExport(false)}
+                  disabled={isStarting}
+                  className="w-full py-3 text-sm font-semibold shadow-lg"
+                >
+                  {isStarting ? (
+                    <Loader2 className="h-4 w-4 animate-spin mr-1.5" />
+                  ) : (
+                    <Download className="h-4 w-4 mr-1.5" />
+                  )}
+                  Export (9:16)
+                </GradientButton>
+                <p className="text-center text-[11px] text-muted-foreground">
+                  Renders high-quality 9:16 MP4 with selected caption style and
+                  B-roll overlays.
+                </p>
+              </div>
+            )}
+
+            {status === 'rendering' && (
+              <div className="rounded-xl border border-primary/30 bg-primary/10 p-5 text-center space-y-3">
+                <div className="flex items-center justify-center gap-2 text-primary font-semibold text-sm">
+                  <Loader2 className="h-5 w-5 animate-spin" />
+                  <span>Rendering your 9:16 clip…</span>
+                </div>
+                <p className="text-xs text-muted-foreground">
+                  FFmpeg is compositing video, burning subtitles, and overlaying
+                  B-roll footage.
+                </p>
+                <div className="h-2 w-full overflow-hidden rounded-full bg-muted">
+                  <div className="h-full w-2/3 animate-pulse rounded-full bg-primary" />
+                </div>
+              </div>
+            )}
+
+            {status === 'ready' && (
+              <div className="space-y-3">
+                <div className="rounded-xl border border-emerald-500/30 bg-emerald-500/10 p-3.5 text-center text-xs text-emerald-400 font-medium">
+                  ✨ Your 9:16 vertical Short is rendered and ready for download!
+                </div>
+                <GradientButton
+                  onClick={handleDownload}
+                  disabled={isDownloading}
+                  className="w-full py-3 text-sm font-bold bg-gradient-to-r from-emerald-500 to-teal-500 text-white shadow-lg hover:opacity-95"
+                >
+                  {isDownloading ? (
+                    <Loader2 className="h-4 w-4 animate-spin mr-1.5" />
+                  ) : (
+                    <Download className="h-4 w-4 mr-1.5" />
+                  )}
+                  Download
+                </GradientButton>
+                <button
+                  type="button"
+                  onClick={() => handleExport(false)}
+                  disabled={isStarting}
+                  className="w-full text-center text-xs text-muted-foreground hover:text-foreground transition-colors underline pt-1"
+                >
+                  Re-export with new edits
+                </button>
+              </div>
+            )}
+
+            {status === 'failed' && (
+              <div className="space-y-3">
+                <div className="flex items-center gap-2 rounded-xl bg-destructive/15 p-3 text-xs text-destructive">
+                  <AlertCircle className="h-4 w-4 shrink-0" />
+                  <span>{errorMessage ?? 'Export failed.'}</span>
+                </div>
+                <GradientButton
+                  variant="outline"
+                  onClick={() => handleExport(false)}
+                  disabled={isStarting}
+                  className="w-full"
+                >
+                  {isStarting ? (
+                    <Loader2 className="h-4 w-4 animate-spin mr-1.5" />
+                  ) : null}
+                  Retry export
+                </GradientButton>
+              </div>
+            )}
+
+            {errorMessage && status !== 'failed' && (
+              <p className="text-xs text-destructive bg-destructive/10 p-2.5 rounded-lg">
+                {errorMessage}
+              </p>
+            )}
+          </div>
+        )}
+
+        {/* Option at the end to Generate YouTube Caption & See Content */}
+        <div className="border-t border-glass-border pt-4">
+          <button
+            type="button"
+            onClick={() => setShowYouTubeCaption((prev) => !prev)}
+            className="flex w-full items-center justify-between rounded-xl border border-rose-500/30 bg-rose-500/10 px-4 py-3 text-left transition-all hover:bg-rose-500/15 cursor-pointer"
+          >
+            <div className="flex items-center gap-2.5">
+              <PlaySquare className="h-4 w-4 text-rose-400 shrink-0" />
+              <div>
+                <span className="block text-xs font-bold text-foreground">
+                  Generate YouTube Caption &amp; See Content
+                </span>
+                <span className="block text-[11px] text-muted-foreground">
+                  View spoken subtitle script, timed cues, and copy YouTube Shorts title, description &amp; hashtags
+                </span>
+              </div>
+            </div>
+            <span className="inline-flex items-center gap-1 rounded-full bg-rose-500/20 px-2.5 py-1 text-[11px] font-semibold text-rose-300">
+              <Sparkles className="h-3 w-3" />
+              {showYouTubeCaption ? 'Hide' : 'Open'}
+            </span>
+          </button>
         </div>
+      </GlassCard>
+
+      {showYouTubeCaption && (
+        <YouTubeCaptionPanel
+          clipId={clipId}
+          onCaptionApplied={onCaptionApplied}
+        />
       )}
-    </GlassCard>
+    </div>
   );
 }

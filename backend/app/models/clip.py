@@ -65,7 +65,7 @@ class BrollPlacement(str, enum.Enum):
     bottom_right = "bottom_right"
     top = "top"
     bottom = "bottom"
-    split = "split"
+    split = "split"  # type: ignore[assignment]
 
 
 class Clip(Base, TimestampMixin):

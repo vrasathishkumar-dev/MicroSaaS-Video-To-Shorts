@@ -849,7 +849,7 @@ def _speaker_framed(
     width: int,
     height: int,
     duration: float,
-    filters: set[str],
+    filters: set[str] | frozenset[str],
 ) -> Any:
     """Crop the source to the speaker, splitting the screen where two talk.
 
@@ -1022,6 +1022,8 @@ def _apply_broll(
                 str(local_path), stream_loop=-1, t=window_duration
             )
 
+        overlay_x: int | str
+        overlay_y: int | str
         if placement == BrollPlacement.split:
             overlay_stream = broll_input.video.filter(
                 "scale", width, half_height, force_original_aspect_ratio="increase"
